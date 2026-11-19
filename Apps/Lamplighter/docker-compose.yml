@@ -1,0 +1,154 @@
+name: lamplighter
+
+# Bounded container logs: json-file never rotates on its own.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ── the app ───────────────────────────────────────────────────────────────────────────
+  # No route of its own: reachable from outside only through the AppShield gate below. On the
+  # shared network because it calls the box's Beacon (and through it the shared claude-code
+  # container), and because that agent calls back into its workspace endpoint.
+  lamplighter-backend:
+    image: ghcr.io/worph/lamplighter:0.1.0
+    container_name: lamplighter-backend
+    hostname: lamplighter-backend
+    restart: unless-stopped
+    user: $PUID:$PGID
+    expose:
+      - 8080
+    environment:
+      TZ: $TZ
+      LAMPLIGHTER_DATA_DIR: /DATA
+      LAMPLIGHTER_PORT: "8080"
+      # Seeds config.yaml on first boot only; Settings → Inference changes it afterwards.
+      # Any OpenAI-compatible endpoint works too (driver `openai`, a base URL and a model).
+      LAMPLIGHTER_INFERENCE_DRIVER: claude-code
+      LAMPLIGHTER_INFERENCE_URL: http://beacon-backend:9300/mcp
+      LAMPLIGHTER_INFERENCE_TOOL: claude-code__query_claude
+      LAMPLIGHTER_INFERENCE_VIA: beacon
+      # How the agent reaches the workspace endpoint: the backend by name on `pcs`, never the
+      # AppShield gate (an SSO redirect is not an API answer).
+      LAMPLIGHTER_PUBLIC_URL: http://lamplighter-backend:8080
+      # Bearer of the admin MCP endpoint, shared with the lamplighter-mcp sidecar.
+      LAMPLIGHTER_ADMIN_MCP_TOKEN: ${LAMPLIGHTER_ADMIN_MCP_TOKEN}
+    volumes:
+      - ${DATA_ROOT:-/DATA}/AppData/lamplighter/:/DATA
+    networks:
+      - pcs
+    cpu_shares: 80
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+
+  # ── the admin MCP, announced to this box's Beacon ─────────────────────────────────────
+  # Points at the backend directly, never at the gate. The bearer never travels in the
+  # announce manifest — Beacon calls the sidecar, the sidecar adds the header.
+  lamplighter-mcp:
+    image: ghcr.io/worph/beaconify:1.0.2
+    container_name: lamplighter-mcp
+    hostname: lamplighter-mcp
+    restart: unless-stopped
+    expose:
+      - 9099
+    environment:
+      TZ: $TZ
+      BEACONIFY_NAME: lamplighter
+      BEACONIFY_DESCRIPTION: "Lamplighter — keeps a fleet of git repos maintained (docs, CVEs, deps, dead code, quality, patterns, architecture, security). Read repos, findings, rounds, proposals and the schedule; request rounds and fixes; dismiss findings; edit policy and check switches. Cannot approve, merge or push."
+      BEACONIFY_UPSTREAM_URL: http://lamplighter-backend:8080/mcp/admin
+      BEACONIFY_AUTH: "Bearer ${LAMPLIGHTER_ADMIN_MCP_TOKEN}"
+    depends_on:
+      - lamplighter-backend
+    networks:
+      - pcs
+    cpu_shares: 30
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  # ── the only public surface ───────────────────────────────────────────────────────────
+  lamplighter:
+    image: ghcr.io/yundera/appshield:3.2.0
+    container_name: lamplighter
+    hostname: lamplighter
+    restart: unless-stopped
+    user: 0:0
+    expose:
+      - 80
+    environment:
+      TZ: $TZ
+      BACKEND_HOST: "lamplighter-backend"
+      BACKEND_PORT: "8080"
+      LISTEN_PORT: "80"
+      OIDC_REGISTRAR_URL: "http://auth-registrar:9092"
+      REDIRECT_HOST_SUFFIXES: "${APP_HOST_SUFFIXES:-${APP_DOMAIN}}"
+      # Forge push webhooks: machine calls, HMAC-verified by Lamplighter with the forge's secret.
+      ALLOWED_PATHS: "hooks"
+    depends_on:
+      - lamplighter-backend
+    networks:
+      - pcs
+    cpu_shares: 80
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+networks:
+  pcs:
+    name: ${APP_NET:-pcs}
+    external: true
+
+x-compose-app:
+  schema_version: 2
+  id: lamplighter
+  version: "0.1.0"
+  routes:
+    - { service: lamplighter, name: lamplighter, upstream-port: 80, path: / }
+  title:
+    en_us: Lamplighter
+  tagline:
+    en_us: An LLM that keeps your repositories maintained
+  description:
+    en_us: |
+      **Lamplighter walks its rounds over your repositories — on a schedule and on every push — and keeps them lit.**
+
+      Nine checks: documentation drift, known CVEs, outdated dependencies, dead code, refactoring, code quality, bad patterns, architecture and security. Findings are remembered (a dismissal sticks until the code changes); fixes are written by an LLM, validated by a second independent session, and delivered as a branch, a pull request or a push — per check, with a person approving in the Activity page.
+
+      - GitHub, Gitea and bare git remotes
+      - Any inference backend: the Claude Code app over MCP, or any OpenAI-compatible API
+      - Administrator chat, and an admin MCP for other assistants
+  developer: Worph
+  category: Developer
+  icon: icon.svg
+  architectures:
+    - amd64
+    - arm64
+  tips:
+    en_us: |
+      1. **Settings → Inference**: the Claude Code app through this box's Beacon is preset; press **Test**.
+      2. **Settings → Forges**: add GitHub / Gitea with a fine-grained token (contents + pull requests), or a bare git prefix.
+      3. **Repos → Add**: enrol repositories, then run a round.
+      Everything lives in `AppData/lamplighter/`: `config.yaml`, `checks/*.md`, `lamplighter.db` and the clones under `repos/`.
+  folders:
+    - path: /DATA/AppData/lamplighter
+      user: $PUID
+      group: $PGID
+  secrets:
+    LAMPLIGHTER_ADMIN_MCP_TOKEN: hex:32
+
+x-casaos:
+  store_app_id: lamplighter
+  main: lamplighter
+  webui_port: 80

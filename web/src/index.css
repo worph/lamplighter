@@ -1,0 +1,31 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, monospace;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  @apply bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100 antialiased;
+}
+
+.prose-ll {
+  @apply text-sm leading-relaxed;
+}
+.prose-ll h1 { @apply text-lg font-semibold mt-4 mb-2; }
+.prose-ll h2 { @apply text-base font-semibold mt-4 mb-2; }
+.prose-ll h3 { @apply text-sm font-semibold mt-3 mb-1; }
+.prose-ll p { @apply my-2; }
+.prose-ll ul { @apply list-disc pl-5 my-2 space-y-1; }
+.prose-ll ol { @apply list-decimal pl-5 my-2 space-y-1; }
+.prose-ll code { @apply font-mono text-[0.85em] bg-stone-100 dark:bg-stone-800 px-1 py-0.5 rounded; }
+.prose-ll pre { @apply bg-stone-100 dark:bg-stone-900 p-3 rounded-lg overflow-x-auto my-2 text-xs; }
+.prose-ll pre code { @apply bg-transparent p-0; }
+.prose-ll a { @apply text-amber-700 dark:text-amber-400 underline; }
+.prose-ll table { @apply text-xs my-2; }
+.prose-ll td, .prose-ll th { @apply border border-stone-200 dark:border-stone-700 px-2 py-1; }
+.prose-ll blockquote { @apply border-l-2 border-stone-300 pl-3 text-stone-600 dark:text-stone-400; }

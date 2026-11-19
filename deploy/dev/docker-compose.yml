@@ -1,0 +1,79 @@
+# Local stack: Lamplighter against the local claude-code container through the local Beacon.
+#
+#   docker compose -f deploy/dev/docker-compose.yml up -d --build                  # Lamplighter only
+#   docker compose -f deploy/dev/docker-compose.yml --profile gitea up -d --build  # + a Gitea fixture forge
+#   docker compose -f deploy/dev/docker-compose.yml --profile mcp up -d            # + beaconify on mcp-net
+#
+# UI: http://localhost:8095 · Gitea: http://localhost:3300
+name: lamplighter-dev
+
+services:
+  lamplighter:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    image: lamplighter:dev
+    container_name: lamplighter-dev
+    hostname: lamplighter
+    restart: unless-stopped
+    ports:
+      - "8095:8080"
+    # The local Beacon is published on the host's :3000.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Seeds config.yaml on first boot only; afterwards Settings → Inference is what runs.
+      LAMPLIGHTER_INFERENCE_DRIVER: claude-code
+      LAMPLIGHTER_INFERENCE_URL: http://host.docker.internal:3000/mcp/
+      LAMPLIGHTER_INFERENCE_TOOL: claude-code__query_claude
+      LAMPLIGHTER_INFERENCE_VIA: beacon
+      # How the agent reaches Lamplighter's workspace endpoint. The local claude-code container
+      # is host-networked, so the published port on localhost is the way in.
+      LAMPLIGHTER_PUBLIC_URL: http://localhost:8095
+      LAMPLIGHTER_ADMIN_MCP_TOKEN: ${LAMPLIGHTER_ADMIN_MCP_TOKEN:-dev-admin-token}
+    volumes:
+      - lamplighter-data:/DATA
+
+  gitea:
+    profiles: ["gitea"]
+    image: gitea/gitea:1.22
+    container_name: lamplighter-gitea
+    restart: unless-stopped
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      # Links in PRs point at the published port, so they open in a browser.
+      GITEA__server__ROOT_URL: http://localhost:3300/
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__webhook__ALLOWED_HOST_LIST: "*"
+    ports:
+      - "3300:3000"
+    volumes:
+      - gitea-data:/data
+
+  mcp:
+    profiles: ["mcp"]
+    image: ghcr.io/worph/beaconify:latest
+    container_name: lamplighter-dev-mcp
+    restart: unless-stopped
+    environment:
+      BEACONIFY_NAME: lamplighter
+      BEACONIFY_DESCRIPTION: "Lamplighter — fleet maintenance: repos, checks, findings, rounds, proposals and the schedule. Reads, configures, requests rounds and fixes; cannot approve, merge or push."
+      BEACONIFY_UPSTREAM_URL: http://lamplighter:8080/mcp/admin
+      BEACONIFY_AUTH: "Bearer ${LAMPLIGHTER_ADMIN_MCP_TOKEN:-dev-admin-token}"
+    depends_on:
+      - lamplighter
+    networks:
+      - default
+      - mcp-net
+
+volumes:
+  lamplighter-data:
+  gitea-data:
+
+networks:
+  mcp-net:
+    external: true
