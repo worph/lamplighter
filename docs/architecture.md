@@ -96,7 +96,7 @@ lamplighter (backend, one Node process)
 └── web/           React SPA: Chat · Repos · Activity · Settings
 
 lamplighter-mcp    (beaconify sidecar: announces the admin MCP to Beacon)
-lamplighter        (AppShield sidecar: SSO in front of the UI; /hooks passes through)
+lamplighter        (AppShield sidecar: SSO in front of everything, /hooks included)
 
 inference backend  (external, shared: claude-code via Beacon, or any OpenAI-compatible API)
 ```
@@ -251,6 +251,10 @@ anything else (security).
 |---|---|---|
 | GitHub | org/repo webhook `push` on the line → `POST /hooks/github` (HMAC verified) | `diff` rounds of every check with `diff` in its scopes |
 | Gitea | org/repo webhook `push` → `POST /hooks/gitea` | same |
+
+**Behind AppShield (the store listing) webhooks cannot arrive:** the store opens no machine path
+through the gate (`appshield-wiring`), so a Yundera box relies on polling. The receivers stay for
+deployments that route `/hooks/*` to the backend themselves.
 | bare git | `git ls-remote` poll per repo, interval from settings (default 15 min) | same |
 | rotation | the scheduler tick | `full` rounds, stalest first (§8.2) |
 | request | a person, the chat, or MCP `request_round` | goes to the front, like Touchstone's requests |

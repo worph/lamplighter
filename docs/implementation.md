@@ -148,8 +148,12 @@ The backend is on `pcs` with:
 - `LAMPLIGHTER_PUBLIC_URL=http://lamplighter-backend:8080`, so the agent calls back by service
   name and never through the SSO gate.
 
-The beaconify sidecar announces the admin MCP. AppShield fronts the UI and lets `/hooks`
-through for webhooks, which Lamplighter verifies with each forge's secret.
+The beaconify sidecar announces the admin MCP. AppShield 4.1 fronts everything, with platform SSO
+and a generated fallback password. It opens no path: the store's `appshield-wiring` rule forbids
+`ALLOWED_PATHS` for machine paths, so webhooks do not arrive there and polling (`poll_min`) is how
+a box notices pushes. The official ClaudeCode listing ships with MCP **off**, so the preset
+`query_claude` through Beacon works only on a box that enables it (yunderalabs does); elsewhere,
+point Settings → Inference at an OpenAI-compatible API with function calling.
 
 Releases: tag, build and push `ghcr.io/worph/lamplighter:<v>`, then bump the image in
 `Apps/Lamplighter/docker-compose.yml`.
