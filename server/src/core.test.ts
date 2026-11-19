@@ -69,6 +69,10 @@ describe('detectors', () => {
     const m = lockPackages({ packages: { '': { version: '1.0.0' }, 'node_modules/a': { version: '1.2.3' }, 'node_modules/@s/b/node_modules/c': { version: '0.1.0' } } })
     expect([...m.keys()].sort()).toEqual(['@s/b/node_modules/c@0.1.0'.replace('@s/b/node_modules/', ''), 'a@1.2.3'].sort())
   })
+  it('skip the root, workspace folders and links', () => {
+    const m = lockPackages({ packages: { '': { version: '1.0.0' }, server: { version: '0.2.0' }, 'node_modules/@x/server': { version: '0.2.0', link: true }, 'node_modules/zod': { version: '3.25.76' } } })
+    expect([...m.keys()]).toEqual(['zod@3.25.76'])
+  })
   it('report major/minor drift only', () => {
     expect(drift('^4.17.1', '5.3.0')).toBe('major')
     expect(drift('4.17.15', '4.18.1')).toBe('minor')
