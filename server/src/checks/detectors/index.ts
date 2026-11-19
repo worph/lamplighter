@@ -17,14 +17,19 @@ type Fetch = typeof fetch
 interface LockPackage {
   version?: string
   dev?: boolean
+  link?: boolean
 }
 
 export function lockPackages(lock: { packages?: Record<string, LockPackage>; dependencies?: Record<string, LockPackage> }): Map<string, string> {
   const out = new Map<string, string>()
   if (lock.packages) {
     for (const [path, p] of Object.entries(lock.packages)) {
-      if (!path || !p.version) continue
-      const name = path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length)
+      // The root, workspace folders (`server`, `web`) and their links are the project itself,
+      // not registry packages: OSV rejects the whole batch if one of them is sent.
+      if (!path || !p.version || p.link) continue
+      const at = path.lastIndexOf('node_modules/')
+      if (at === -1) continue
+      const name = path.slice(at + 'node_modules/'.length)
       out.set(`${name}@${p.version}`, name)
     }
   } else if (lock.dependencies) {
