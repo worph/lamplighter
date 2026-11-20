@@ -162,6 +162,7 @@ describe('reconcile', () => {
     const db = openDb(join(tmp(), 'db.sqlite'))
     db.prepare("INSERT INTO forges (id, kind, name, created_at) VALUES ('f','git','f','now')").run()
     db.prepare("INSERT INTO groups (id, name) VALUES ('default','default')").run()
+    db.prepare("INSERT OR IGNORE INTO groups (id, name, policy) VALUES ('default','Default','')").run()
     db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, created_at) VALUES ('f~r','f','default','','r','x','main','now')").run()
     const rec = (title: string, anchor = 'README.md') => ({ category: 'stale-readme', anchor, title, body: '', severity: 'minor' as const })
     const base = { repo: 'f~r', check: 'docs', sensitive: false, worktree: repo }
@@ -212,5 +213,71 @@ describe('forge REST clients', () => {
     expect(await gh.repoInfo('o', 'r')).toMatchObject({ defaultBranch: 'dev', visibility: 'public' })
     expect(await gh.prState('o', 'r', 9)).toBe('merged')
     expect(gh.gitAuth()['http.extraHeader']).toMatch(/^Authorization: Basic /)
+  })
+})
+
+describe('forge tokens and write access', () => {
+  const setup = () => {
+    const db = openDb(join(tmp(), 'db.sqlite'))
+    db.prepare("INSERT INTO forges (id, kind, name, created_at) VALUES ('github','github','GitHub','now')").run()
+    db.prepare("INSERT OR IGNORE INTO groups (id, name, policy) VALUES ('default','Default','')").run()
+    db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, visibility, created_at) VALUES ('github~o/r','github','default','o','r','https://github.com/o/r.git','main','public','now')").run()
+    const app = { db, config: { current: configSchema.parse({}) } } as unknown as import('./context.js').App
+    const repo = { forge_id: 'github', owner: 'o', name: 'r' }
+    return { db, app, repo }
+  }
+  /** GitHub as seen by a token whose account may (or may not) push, and whose grant does (or does not) include Contents. */
+  const fakeGitHub = (accountPush: boolean, contents: boolean) =>
+    (async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname
+      const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+      if (path === '/user') return json(200, { login: 'bot', id: 42 })
+      if (path === '/repos/o/r') return json(200, { permissions: { push: accountPush } })
+      if (path === '/repos/o/r/git/blobs' && init?.method === 'POST') return contents ? json(422, { message: 'Invalid request' }) : json(403, { message: 'Resource not accessible by personal access token' })
+      return json(404, { message: 'Not Found' })
+    }) as typeof fetch
+
+  it('normalizes a pasted token and refuses what is not one', async () => {
+    const { normalizeToken } = await import('./forges/auth.js')
+    expect(normalizeToken('  github_pat_abc \n')).toBe('github_pat_abc')
+    expect(() => normalizeToken('two words')).toThrow(/one word/)
+    expect(() => normalizeToken('')).toThrow(/required|empty/)
+  })
+
+  it('blocks fixing without a token, and until the token may push to the repo', async () => {
+    const { setForgeToken, writeAccess, deliveryBlocker, commitIdentity } = await import('./forges/auth.js')
+    const { forgeRow } = await import('./forges/index.js')
+    const { db, app, repo } = setup()
+    expect(writeAccess(app, repo)).toMatchObject({ ok: false, why: expect.stringMatching(/no token/) })
+
+    const real = globalThis.fetch
+    try {
+      globalThis.fetch = fakeGitHub(true, false)
+      const failing = await setForgeToken(app, 'github', 'github_pat_x', 'test')
+      expect(failing.state).toBe('failing')
+      expect(writeAccess(app, repo)).toMatchObject({ ok: false, why: expect.stringMatching(/Contents/) })
+      expect(deliveryBlocker(forgeRow(db, 'github'), 'o/r')).toMatch(/Contents/)
+      // One alert per forge, opened by the failing check and closed by the working one.
+      const openAlerts = () => (db.prepare("SELECT COUNT(*) AS n FROM activity WHERE kind = 'alert' AND state = 'open'").get() as { n: number }).n
+      expect(openAlerts()).toBe(1)
+
+      globalThis.fetch = fakeGitHub(true, true)
+      const ok = await setForgeToken(app, 'github', 'github_pat_y', 'test')
+      expect(ok).toMatchObject({ state: 'ok', login: 'bot', user_id: 42 })
+      expect(writeAccess(app, repo).ok).toBe(true)
+      expect(deliveryBlocker(forgeRow(db, 'github'), 'o/r')).toBeUndefined()
+      expect(openAlerts()).toBe(0)
+      // The default identity gives way to the token account's noreply address.
+      expect(commitIdentity(app, 'github')).toEqual({ name: 'Lamplighter', email: '42+bot@users.noreply.github.com' })
+
+      globalThis.fetch = fakeGitHub(false, true)
+      await setForgeToken(app, 'github', 'github_pat_z', 'test')
+      expect(writeAccess(app, repo)).toMatchObject({ ok: false, why: expect.stringMatching(/account cannot push/) })
+    } finally {
+      globalThis.fetch = real
+    }
+    // The token never leaves the server: the view the Settings page gets has no token field.
+    const { forgeView } = await import('./forges/auth.js')
+    expect(JSON.stringify(forgeView(forgeRow(db, 'github')))).not.toContain('github_pat')
   })
 })

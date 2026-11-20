@@ -45,6 +45,7 @@ export default function Repos() {
                         <Badge>{r.forge_id}</Badge>
                         <Badge tone={r.visibility === 'public' ? 'blue' : 'stone'}>{r.visibility}</Badge>
                         {r.group_id !== 'default' && <Badge tone="violet">{r.group_id}</Badge>}
+                        {!r.write.ok && <span title={r.write.why}><Badge tone="amber">read-only: fixing blocked</Badge></span>}
                       </div>
                     </td>
                     <td className="px-2 py-2 text-xs"><code>{r.line}</code> <span className="text-stone-400 font-mono">{r.last_head?.slice(0, 7)}</span></td>

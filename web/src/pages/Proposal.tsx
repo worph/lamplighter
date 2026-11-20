@@ -46,19 +46,23 @@ export function ProposalActions({ p, onDone }: { p: ProposalRow; onDone: () => v
   const reject = useMutation({ mutationFn: () => api.reject(p.id, reason), onSuccess: onDone })
   const merge = useMutation({ mutationFn: () => api.merge(p.id), onSuccess: onDone })
   const revert = useMutation({ mutationFn: () => api.revert(p.id), onSuccess: onDone })
+  const blocked = p.write?.ok === false
   const busy = approve.isPending || reject.isPending || merge.isPending || revert.isPending
   const ref = p.submitted_ref ? (JSON.parse(p.submitted_ref) as { url?: string; number?: number; branch?: string }) : {}
   return (
     <div className="space-y-2">
+      {blocked && ['ready', 'held', 'landed'].includes(p.state) && (
+        <p className="rounded-md bg-amber-50 dark:bg-amber-950/60 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">Delivery is blocked: {p.write!.why}</p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {(p.state === 'ready' || p.state === 'held') && (
           p.state === 'held'
-            ? <Confirmed label="Deliver anyway" word={p.id} onConfirm={() => approve.mutate()} busy={busy} />
-            : <Button variant="primary" onClick={() => approve.mutate()} disabled={busy}>{approve.isPending ? 'Delivering…' : `Approve → ${p.delivery}`}</Button>
+            ? <Confirmed label="Deliver anyway" word={p.id} onConfirm={() => approve.mutate()} busy={busy || blocked} />
+            : <Button variant="primary" onClick={() => approve.mutate()} disabled={busy || blocked}>{approve.isPending ? 'Delivering…' : `Approve → ${p.delivery}`}</Button>
         )}
         {p.state === 'submitted' && p.delivery !== 'pr' && <Confirmed label="Merge (fast-forward)" word={p.id} onConfirm={() => merge.mutate()} busy={busy} />}
         {p.state === 'submitted' && ref.url && <a className="text-sm underline" href={ref.url} target="_blank" rel="noreferrer">Open PR #{ref.number} ↗</a>}
-        {p.state === 'landed' && p.delivery === 'push' && <Confirmed label="Revert" variant="danger" word={p.id} onConfirm={() => revert.mutate()} busy={busy} />}
+        {p.state === 'landed' && p.delivery === 'push' && <Confirmed label="Revert" variant="danger" word={p.id} onConfirm={() => revert.mutate()} busy={busy || blocked} />}
         {['ready', 'held', 'submitted'].includes(p.state) && !rejecting && <Button variant="danger" onClick={() => setRejecting(true)} disabled={busy}>{p.state === 'submitted' ? 'Close' : 'Reject'}…</Button>}
       </div>
       {rejecting && (

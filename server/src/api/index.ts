@@ -6,6 +6,7 @@ import { newId, now } from '../db/index.js'
 import { listEvents, logEvent } from '../events.js'
 import { dismiss, lastDismissal, listFindings, reopen } from '../findings/index.js'
 import { forgeApi, forgeRow, listForges } from '../forges/index.js'
+import { checkForge, forgeView, normalizeToken, setForgeToken, writeAccess } from '../forges/auth.js'
 import { driverFor } from '../inference/index.js'
 import { getItem, listItems, resolveItem } from '../activity/index.js'
 import { addRepo, getRepo, listGroups, listRepos, parseSettings, getGroup } from '../repos/registry.js'
@@ -41,7 +42,6 @@ const forgeInput = z.object({
   name: z.string().min(1),
   base_url: z.string().optional().nullable(),
   username: z.string().optional().nullable(),
-  token: z.string().optional().nullable(),
   webhook_secret: z.string().optional().nullable(),
 })
 
@@ -73,7 +73,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
   f.get('/api/v1/repos', async () =>
     listRepos(app.db).map((r) => ({
       key: r.key, forge_id: r.forge_id, group_id: r.group_id, owner: r.owner, name: r.name, line: r.line, visibility: r.visibility,
-      last_head: r.last_head, last_fetch_at: r.last_fetch_at, fetch_error: r.fetch_error, lamps: lamps(app, r.key),
+      last_head: r.last_head, last_fetch_at: r.last_fetch_at, fetch_error: r.fetch_error, lamps: lamps(app, r.key), write: writeAccess(app, r),
     })),
   )
 
@@ -84,6 +84,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
     const r = await addRepo(app.db, { ...body, owner: body.owner || undefined, remote_url: body.remote_url || undefined, line: body.line || undefined })
     logEvent(app.db, { code: 'REPO_ADDED', repo: r.key, message: 'added from the UI' })
     void app.pollNow(r.key)
+    void checkForge(app, r.forge_id).catch(() => undefined) // a new repo is a new "may it push here?"
     return r
   })
 
@@ -96,6 +97,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
       settings: parseSettings(r.settings_json),
       group,
       lamps: lamps(app, key),
+      write: writeAccess(app, r),
       checks: app.checks.list().map((def) => ({ kind: def.kind, title: def.title, scopes: def.scopes, agent: def.agent, settings: settingsFor(app, r, def) })),
       findings: listFindings(app.db, { repo: key, limit: 500 }).map((x) => ({ ...x, dismissal: x.state === 'dismissed' ? lastDismissal(app.db, x.id) : undefined })),
       rounds: app.db.prepare('SELECT id, check_kind, kind, scope, status, summary, error, trigger, base_sha, head_sha, proposal_id, started_at, ended_at FROM rounds WHERE repo_key = ? ORDER BY started_at DESC LIMIT 60').all(key),
@@ -175,7 +177,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
     if (!p) throw Object.assign(new Error('no such proposal'), { statusCode: 404 })
     const ids = JSON.parse(p.finding_ids) as string[]
     const findings = ids.map((id) => app.db.prepare('SELECT id, title, anchor, category, severity, state FROM findings WHERE id = ?').get(id)).filter(Boolean)
-    return { ...p, validation: p.validation ? JSON.parse(p.validation) : null, findings }
+    return { ...p, validation: p.validation ? JSON.parse(p.validation) : null, findings, write: writeAccess(app, getRepo(app.db, p.repo_key)) }
   })
   f.post('/api/v1/proposals/:id/approve', async (req) => deliver(app, (req.params as { id: string }).id, 'operator'))
   f.post('/api/v1/proposals/:id/reject', async (req) => {
@@ -205,7 +207,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
       config: cfg,
       inference_bearer: masked(getSetting(app.db, SETTING.inferenceBearer)),
       admin_mcp_token: masked(getSetting(app.db, SETTING.adminMcpToken)),
-      forges: listForges(app.db).map((x) => ({ ...x, token: masked(x.token), webhook_secret: x.webhook_secret ? '••••' : null })),
+      forges: listForges(app.db).map((x) => ({ ...forgeView(x), repos: listRepos(app.db).filter((r) => r.forge_id === x.id).map((r) => (r.owner ? `${r.owner}/${r.name}` : r.name)) })),
       groups: listGroups(app.db),
       checks: app.checks.list().map((c) => ({ kind: c.kind, title: c.title, revision: c.revision, scopes: c.scopes, agent: c.agent, sensitive: c.sensitive, defaults: c.defaults, settings: { ...c.defaults, ...(cfg.checks[c.kind] ?? {}) } })),
       check_errors: app.checks.errors,
@@ -251,8 +253,8 @@ export function registerApi(f: FastifyInstance, app: App): void {
     const b = forgeInput.parse(req.body)
     if (b.kind === 'gitea' && !b.base_url) throw new Error('a Gitea forge needs its base URL')
     app.db
-      .prepare('INSERT INTO forges (id, kind, name, base_url, username, token, webhook_secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(b.id, b.kind, b.name, b.base_url || null, b.username || null, b.token || null, b.webhook_secret || null, now())
+      .prepare('INSERT INTO forges (id, kind, name, base_url, username, webhook_secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(b.id, b.kind, b.name, b.base_url || null, b.username || null, b.webhook_secret || null, now())
     return { id: b.id }
   })
   f.patch('/api/v1/forges/:id', async (req) => {
@@ -270,6 +272,14 @@ export function registerApi(f: FastifyInstance, app: App): void {
     return { ok: true }
   })
   f.post('/api/v1/forges/:id/probe', async (req) => forgeApi(forgeRow(app.db, (req.params as { id: string }).id)).probe())
+  // The token, Touchstone's way: write-only (nothing returns it), checked in the same response,
+  // and only here — no chat or admin-MCP tool can choose whose name Lamplighter pushes under.
+  f.post('/api/v1/forges/:id/auth/check', async (req) => checkForge(app, (req.params as { id: string }).id))
+  f.put('/api/v1/forges/:id/token', async (req) => {
+    const id = (req.params as { id: string }).id
+    return setForgeToken(app, id, normalizeToken((req.body as { token?: unknown } | undefined)?.token), 'operator')
+  })
+  f.delete('/api/v1/forges/:id/token', async (req) => setForgeToken(app, (req.params as { id: string }).id, null, 'operator'))
   f.get('/api/v1/forges/:id/discover', async (req) => {
     const { owner } = z.object({ owner: z.string().min(1) }).parse(req.query)
     const id = (req.params as { id: string }).id

@@ -43,6 +43,19 @@ export class GiteaForge implements ForgeApi {
     }
   }
 
+  async whoami(): Promise<{ login: string; id: number }> {
+    return this.req<{ login: string; id: number }>('/user')
+  }
+
+  async canPush(owner: string, name: string): Promise<{ push: boolean; detail?: string }> {
+    try {
+      const r = await this.req<{ permissions?: { push?: boolean } }>(`/repos/${owner}/${name}`)
+      return r.permissions?.push ? { push: true } : { push: false, detail: 'the account cannot push here' }
+    } catch (err) {
+      return { push: false, detail: (err as Error).message }
+    }
+  }
+
   gitAuth(): Record<string, string> {
     return this.row.token ? basicAuthHeader(this.row.username || 'lamplighter', this.row.token) : {}
   }

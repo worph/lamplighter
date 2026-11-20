@@ -110,8 +110,21 @@ Apps/Lamplighter/     store listing for a Yundera box: backend + beaconify + App
 | `LAMPLIGHTER_ADMIN_MCP_TOKEN` | (db) | admin MCP bearer, shared with the beaconify sidecar |
 | `LAMPLIGHTER_DATA_DIR`, `_PORT`, `_HOST`, `_LOG_LEVEL` | — | runtime |
 
-Forge tokens are entered in Settings → Forges and stored in the database. They are never shown
-back in full and never reach a prompt.
+Forge tokens are set the way Touchstone sets its GitHub token: in Settings → Forges, one section per
+GitHub/Gitea forge that says what kind of token to make and how to scope it (fine-grained; Contents
+and Pull requests read/write; only the monitored repositories). They are stored in the database and
+**write-only**: no route returns them (`PUT|DELETE /api/v1/forges/:id/token`), and no chat or
+admin-MCP tool can set one. Each save is checked in the same response (`forges/auth.ts`): whose
+token it is, and whether it may push to each monitored repo (account role, then the token's own
+Contents grant). The check reruns every 30 minutes; a failing one opens one alert per forge.
+
+**No write access blocks fixing on that repo** (`writeAccess`): no proposal is drafted, validated or
+delivered there, so nothing is authored only to fail at the push. Rounds and `report` delivery go
+on; the Repo page says why and disables Fix, Armed, Auto-submit and the fixing delivery modes.
+A forge with no token reads anonymously, so every repo on it is blocked this way.
+
+Commits are authored by `identity.name` and `identity.email`; with the email empty (or the old
+default `lamplighter@localhost`), a GitHub forge's token account is used, by its noreply address.
 
 ## 5. Running it
 

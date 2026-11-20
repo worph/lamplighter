@@ -182,4 +182,7 @@ export const MIGRATIONS: string[] = [
   // A proposal for this finding failed or was refused against this input: do not try again
   // until the input changes (Touchstone's task memory, applied to findings).
   `ALTER TABLE findings ADD COLUMN blocked_input TEXT;`,
+  // The forge token, set from Settings the way Touchstone's is: when, and what its check found.
+  `ALTER TABLE forges ADD COLUMN token_set_at TEXT;
+   ALTER TABLE forges ADD COLUMN auth_json TEXT;`,
 ]

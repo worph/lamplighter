@@ -2,6 +2,7 @@ import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
 import { forgeApi, forgeRow } from '../forges/index.js'
+import { assertCanDeliver, commitIdentity, deliveryBlocker } from '../forges/auth.js'
 import { git } from '../forges/gitcli.js'
 import { asOwnBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
 import { addItem, openItemFor, recordOverride, resolveFor } from '../activity/index.js'
@@ -108,14 +109,27 @@ export async function afterReady(app: App, id: string): Promise<void> {
   const { resolveSettings } = await import('../checks/index.js')
   const { getGroup, parseSettings } = await import('../repos/registry.js')
   const s = def ? resolveSettings(def, app.config.current, parseSettings(getGroup(app.db, repo.group_id).settings_json), parseSettings(repo.settings_json)) : undefined
-  if (s?.auto_submit && deliveriesToday(app) < app.config.current.schedule.deliveries_per_day) {
-    await deliver(app, id, 'auto')
-    return
+  let waiting = ''
+  if (s?.auto_submit) {
+    const blocker = deliveryBlocker(forgeRow(app.db, repo.forge_id), `${repo.owner}/${repo.name}`)
+    if (blocker) waiting = ` (auto-submit waiting: ${blocker})`
+    else if (deliveriesToday(app) >= app.config.current.schedule.deliveries_per_day) waiting = ' (auto-submit waiting on the daily delivery cap)'
+    else {
+      try {
+        await deliver(app, id, 'auto')
+        return
+      } catch (err) {
+        // The fix is validated; a failed push says nothing about it. It stays ready for a person.
+        if (mustGet(app, id).state !== 'ready') throw err
+        waiting = ` (auto-submit failed: ${(err as Error).message.slice(0, 300)})`
+        logEvent(app.db, { level: 'warn', code: 'DELIVERY_FAILED', repo: repo.key, message: `${p.check_kind} auto-delivery: ${(err as Error).message}`, detail: { proposal: id } })
+      }
+    }
   }
   addItem(app.db, {
     kind: 'proposal-ready', repo: repo.key, ref: id, sensitive: !!p.sensitive,
     title: title(p),
-    body: `${p.check_kind} · ${JSON.parse(p.finding_ids).length} finding(s) · delivery: ${p.delivery}${s?.auto_submit ? ' (auto-submit waiting on the daily delivery cap)' : ''}`,
+    body: `${p.check_kind} · ${JSON.parse(p.finding_ids).length} finding(s) · delivery: ${p.delivery}${waiting}`,
   })
 }
 
@@ -125,6 +139,7 @@ export async function deliver(app: App, id: string, by: string): Promise<Proposa
   if (!p.head_sha) throw new Error('proposal has no commit')
   const repo = getRepo(app.db, p.repo_key)
   const forge = forgeRow(app.db, repo.forge_id)
+  assertCanDeliver(forge, `${repo.owner}/${repo.name}`)
   const branch = asOwnBranch(p.branch)
   try {
     if (p.delivery === 'push') {
@@ -215,11 +230,12 @@ export async function revertPush(app: App, id: string, by: string): Promise<Prop
   const p = mustGet(app, id)
   if (p.state !== 'landed' || p.delivery !== 'push' || !p.head_sha) throw new Error('only a pushed proposal can be reverted')
   const repo = getRepo(app.db, p.repo_key)
+  assertCanDeliver(forgeRow(app.db, repo.forge_id), `${repo.owner}/${repo.name}`)
   const head = await app.mirrors.fetch(repo)
   const wtId = newId('rv')
   const wt = await app.mirrors.addWorktree(repo, wtId, head)
   try {
-    const ident = app.config.current.identity
+    const ident = commitIdentity(app, repo.forge_id)
     await git(['revert', '--no-commit', `${p.base_sha}..${p.head_sha}`], { cwd: wt, config: { 'user.name': ident.name, 'user.email': ident.email } })
     await git(['commit', '-q', '-F', '-'], {
       cwd: wt,

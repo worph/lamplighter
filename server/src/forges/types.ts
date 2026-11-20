@@ -9,6 +9,21 @@ export interface ForgeRow {
   token: string | null
   webhook_secret: string | null
   created_at: string
+  /** When the token was last set from the Settings page (never the token itself). */
+  token_set_at: string | null
+  /** The last token check, JSON `ForgeAuth`. */
+  auth_json: string | null
+}
+
+/** What the token check made of a forge's token (Touchstone's GitHubStatus, per forge). */
+export interface ForgeAuth {
+  state: 'unconfigured' | 'unknown' | 'ok' | 'failing'
+  login?: string
+  user_id?: number
+  /** One row per monitored repo on this forge: may the token push there? */
+  repos?: { repo: string; push: boolean; detail?: string }[]
+  problems: string[]
+  checked_at?: string
 }
 
 export interface RemoteRepo {
@@ -39,6 +54,10 @@ export interface ForgeApi {
   /** Git `-c` config carrying the credential (http.extraHeader). Empty for anonymous. */
   gitAuth(): Record<string, string>
   cloneUrl(owner: string, name: string): string
+  /** The token's account. Throws without a token or when the forge refuses it. */
+  whoami?(): Promise<{ login: string; id: number }>
+  /** May the token push to this repo? `detail` says why not. */
+  canPush?(owner: string, name: string): Promise<{ push: boolean; detail?: string }>
   repoInfo(owner: string, name: string): Promise<RemoteRepo>
   listRepos(owner: string): Promise<RemoteRepo[]>
   openPr?(owner: string, name: string, args: { head: string; base: string; title: string; body: string }): Promise<PrRef>

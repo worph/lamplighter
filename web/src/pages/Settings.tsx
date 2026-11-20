@@ -107,7 +107,7 @@ function General({ s }: { s: SettingsView }) {
           <input className={inputCls} value={url} onChange={(e) => setUrl(e.target.value)} />
         </Field>
         <Field label="Commit author name"><input className={inputCls} value={id.name} onChange={(e) => setId({ ...id, name: e.target.value })} /></Field>
-        <Field label="Commit author email"><input className={inputCls} value={id.email} onChange={(e) => setId({ ...id, email: e.target.value })} /></Field>
+        <Field label="Commit author email" hint="empty: the GitHub token account’s noreply address"><input className={inputCls} value={id.email} onChange={(e) => setId({ ...id, email: e.target.value })} /></Field>
       </div>
       <ErrorNote error={save.error} />
     </Card>
@@ -116,31 +116,31 @@ function General({ s }: { s: SettingsView }) {
 
 function Forges({ s }: { s: SettingsView }) {
   const refresh = useRefresh()
-  const blank = { id: '', kind: 'github', name: '', base_url: '', username: '', token: '', webhook_secret: '' }
+  const blank = { id: '', kind: 'github', name: '', base_url: '', username: '', webhook_secret: '' }
   const [f, setF] = useState(blank)
   const [probe, setProbe] = useState<Record<string, { ok: boolean; detail: string }>>({})
   const add = useMutation({ mutationFn: () => api.addForge(f), onSuccess: () => { setF(blank); refresh() } })
   const del = useMutation({ mutationFn: (id: string) => api.deleteForge(id), onSuccess: refresh })
   const doProbe = useMutation({ mutationFn: (id: string) => api.probeForge(id), onSuccess: (d, id) => setProbe((p) => ({ ...p, [id]: d })) })
-  const [token, setToken] = useState<Record<string, string>>({})
-  const setTok = useMutation({ mutationFn: (a: { id: string; token: string }) => api.patchForge(a.id, { token: a.token }), onSuccess: refresh })
   return (
     <Card title="Forges">
       <ul className="divide-y divide-stone-100 dark:divide-stone-800 text-sm mb-4">
         {s.forges.map((x) => (
-          <li key={x.id} className="py-2 flex flex-wrap items-center gap-2">
-            <span className="font-medium">{x.name}</span><Badge>{x.kind}</Badge><code className="text-xs text-stone-500">{x.id}</code>
-            <span className="text-xs text-stone-500 truncate max-w-xs">{x.base_url}</span>
-            <Badge tone={x.token ? 'green' : 'stone'}>{x.token ? `token ${x.token}` : 'anonymous'}</Badge>
-            {x.webhook_secret && <Badge tone="blue">webhook</Badge>}
-            {probe[x.id] && <Badge tone={probe[x.id]!.ok ? 'green' : 'red'}>{probe[x.id]!.detail}</Badge>}
-            <span className="ml-auto flex gap-2">
-              <input type="password" className={`${inputCls} !w-40 !py-1 text-xs`} placeholder="new token" value={token[x.id] ?? ''} onChange={(e) => setToken({ ...token, [x.id]: e.target.value })} />
-              <Button className="!py-1 text-xs" disabled={!token[x.id]} onClick={() => setTok.mutate({ id: x.id, token: token[x.id]! })}>Set</Button>
-              <Button className="!py-1 text-xs" onClick={() => doProbe.mutate(x.id)}>Probe</Button>
-              <Button variant="danger" className="!py-1 text-xs" onClick={() => del.mutate(x.id)}>Remove</Button>
-            </span>
-            {x.webhook_secret && x.kind !== 'git' && <div className="w-full text-[11px] text-stone-500">Webhook URL: <code>{s.config.public_url}/hooks/{x.kind}/{x.id}</code> (push events, JSON, with the secret)</div>}
+          <li key={x.id} className="py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{x.name}</span><Badge>{x.kind}</Badge><code className="text-xs text-stone-500">{x.id}</code>
+              <span className="text-xs text-stone-500 truncate max-w-xs">{x.base_url}</span>
+              {x.webhook_secret && <Badge tone="blue">webhook</Badge>}
+              {probe[x.id] && <Badge tone={probe[x.id]!.ok ? 'green' : 'red'}>{probe[x.id]!.detail}</Badge>}
+              <span className="ml-auto flex gap-2">
+                <Button className="!py-1 text-xs" onClick={() => doProbe.mutate(x.id)}>Probe</Button>
+                <Button variant="danger" className="!py-1 text-xs" onClick={() => del.mutate(x.id)}>Remove</Button>
+              </span>
+            </div>
+            {x.webhook_secret && x.kind !== 'git' && <div className="mt-1 text-[11px] text-stone-500">Webhook URL: <code>{s.config.public_url}/hooks/{x.kind}/{x.id}</code> (push events, JSON, with the secret)</div>}
+            {x.kind === 'git'
+              ? <p className="mt-1 text-[11px] text-stone-500">Bare git authenticates with the container’s SSH key (or the remote’s own credentials), not a token.</p>
+              : <ForgeToken forge={x} identity={s.config.identity} />}
           </li>
         ))}
       </ul>
@@ -155,13 +155,109 @@ function Forges({ s }: { s: SettingsView }) {
         <Field label={f.kind === 'git' ? 'Remote prefix' : f.kind === 'gitea' ? 'Base URL' : 'API URL (optional)'} hint={f.kind === 'git' ? 'e.g. ssh://git@host/srv or a path' : undefined}>
           <input className={inputCls} value={f.base_url} onChange={(e) => setF({ ...f, base_url: e.target.value })} placeholder={f.kind === 'gitea' ? 'https://gitea.example' : ''} />
         </Field>
-        <Field label="Username (git auth)"><input className={inputCls} value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} /></Field>
-        <Field label="Token" hint="fine-grained; contents + pull requests write"><input type="password" className={inputCls} value={f.token} onChange={(e) => setF({ ...f, token: e.target.value })} /></Field>
+        <Field label="Username (git auth, optional)"><input className={inputCls} value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} /></Field>
         <Field label="Webhook secret (optional)"><input type="password" className={inputCls} value={f.webhook_secret} onChange={(e) => setF({ ...f, webhook_secret: e.target.value })} /></Field>
         <div className="flex items-end"><Button variant="primary" disabled={!f.id || !f.name} onClick={() => add.mutate()}>Add forge</Button></div>
       </div>
-      <ErrorNote error={add.error || del.error || doProbe.error || setTok.error} />
+      <p className="mt-2 text-[11px] text-stone-500">The token is set on the forge once it is added.</p>
+      <ErrorNote error={add.error || del.error || doProbe.error} />
     </Card>
+  )
+}
+
+const GH_TOKENS_URL = 'https://github.com/settings/tokens'
+const GH_NEW_FINE_GRAINED_URL = 'https://github.com/settings/personal-access-tokens/new'
+
+/**
+ * A forge's token, Touchstone's way: what kind to make, exactly how to scope it, and the field
+ * to paste it into. Write-only — the page never shows the token in use, and the field is emptied
+ * on save. The answer to "does it work" comes back with the save.
+ */
+function ForgeToken({ forge: x, identity }: { forge: SettingsView['forges'][number]; identity: { name: string; email: string } }) {
+  const refresh = useRefresh()
+  const [token, setToken] = useState('')
+  const done = () => { setToken(''); refresh() }
+  const save = useMutation({ mutationFn: () => api.setForgeToken(x.id, token), onSuccess: done })
+  const clear = useMutation({ mutationFn: () => api.clearForgeToken(x.id), onSuccess: done })
+  const check = useMutation({ mutationFn: () => api.checkForge(x.id), onSuccess: refresh })
+  const busy = save.isPending || clear.isPending || check.isPending
+  const a = x.auth
+  const owners = [...new Set(x.repos.map((r) => r.split('/')[0]).filter(Boolean))]
+  const list = (items: string[]) => items.length ? items.map((o, i) => <span key={o}>{i ? ', ' : ''}<code>{o}</code></span>) : null
+  const status =
+    a.state === 'ok' ? `works — as ${a.login}`
+      : a.state === 'failing' ? `does not work — ${a.problems.join('; ')}`
+        : a.state === 'unknown' ? 'not checked yet'
+          : 'no token: Lamplighter reads public repositories and cannot push, open pull requests or see private ones'
+  const usesNoreply = !identity.email || identity.email === 'lamplighter@localhost'
+  return (
+    <div className="mt-3 rounded-md border border-stone-200 dark:border-stone-800 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium uppercase tracking-wide text-stone-500">{x.kind === 'github' ? 'GitHub' : 'Gitea'} token</span>
+        <Badge tone={x.token_set ? 'stone' : 'amber'}>{x.token_set ? (x.token_set_at ? `set here ${ago(x.token_set_at)}` : 'set') : 'no token'}</Badge>
+        <Badge tone={a.state === 'ok' ? 'green' : a.state === 'failing' ? 'red' : 'stone'}>{status}</Badge>
+        {a.checked_at && <span className="text-[11px] text-stone-500">checked {ago(a.checked_at)}</span>}
+      </div>
+
+      <p className="mt-2 text-xs text-stone-600 dark:text-stone-400 leading-relaxed">
+        The account Lamplighter pushes branches, pushes and pull requests as. Everything it delivers
+        carries that account’s name, so use one that may speak for these repositories: a bot account,
+        or an organisation-owned token — not your personal one unless you want the changes to be yours.
+        {x.kind === 'github' && <> Make a <strong>fine-grained</strong> personal access token, <strong>not a classic one</strong>: a classic token reaches every repository the account can, a fine-grained one only the repositories you pick.</>}
+      </p>
+
+      {x.kind === 'github' ? (
+        <ol className="mt-2 list-decimal pl-5 text-xs text-stone-600 dark:text-stone-400 leading-relaxed space-y-0.5">
+          <li>Open <a className="underline" href={GH_TOKENS_URL} target="_blank" rel="noreferrer">github.com/settings/tokens</a> → <em>Fine-grained tokens</em> → <em>Generate new token</em> (or go <a className="underline" href={GH_NEW_FINE_GRAINED_URL} target="_blank" rel="noreferrer">straight to the form</a>).</li>
+          <li><strong>Resource owner:</strong> {list(owners) ?? 'the owner of the repositories'}{owners.length > 1 ? ' — one token reaches one owner; repositories under another owner need that owner’s token on a second forge' : ''}. For an organisation, pick the organisation, not your own account.</li>
+          <li><strong>Repository access:</strong> <em>Only select repositories</em> → {list(x.repos.map((r) => r.split('/')[1] ?? r)) ?? 'the repositories Lamplighter monitors'}. Add new ones to the token as you add them here.</li>
+          <li><strong>Repository permissions:</strong> <em>Contents</em> read and write (to push its <code>lamplighter/…</code> branches, or the line for <code>push</code> delivery), <em>Pull requests</em> read and write, <em>Metadata</em> read-only (GitHub adds it). Nothing else.</li>
+          <li><strong>Expiration</strong> is your call. When it lapses the status turns failing and an alert opens; paste a new one here.</li>
+          <li>If the organisation requires approval, an owner approves it under the organisation’s <em>Settings → Personal access tokens</em>; until then GitHub refuses it.</li>
+        </ol>
+      ) : (
+        <ol className="mt-2 list-decimal pl-5 text-xs text-stone-600 dark:text-stone-400 leading-relaxed space-y-0.5">
+          <li>On {x.base_url ? <code>{x.base_url}</code> : 'the Gitea instance'}, signed in as the account Lamplighter should act as: <em>Settings → Applications → Generate new token</em>.</li>
+          <li><strong>Permissions:</strong> <em>repository</em> read and write, <em>issue</em> read and write (labels on pull requests), <em>user</em> read. Nothing else.</li>
+          <li>The account needs write access to {list(x.repos) ?? 'the repositories Lamplighter monitors'}.</li>
+        </ol>
+      )}
+      <p className="mt-1 text-xs text-stone-600 dark:text-stone-400">
+        Once, by hand, on each repository: create a <code>lamplighter</code> label{x.kind === 'github' ? ' — the token deliberately cannot create labels; without it pull requests still open, unlabelled' : ' (Lamplighter creates it if the token may)'}.
+      </p>
+
+      {a.repos && a.repos.length > 0 && (
+        <ul className="mt-2 text-xs space-y-0.5">
+          {a.repos.map((r) => (
+            <li key={r.repo} className="flex flex-wrap gap-2 items-center">
+              <Badge tone={r.push ? 'green' : 'red'}>{r.push ? 'can push' : 'cannot push'}</Badge><code>{r.repo}</code>
+              {r.detail && <span className="text-stone-500">{r.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          type="password" autoComplete="off" spellCheck={false} aria-label={`${x.name} token`}
+          className={`${inputCls} !w-auto flex-1 min-w-[14rem]`}
+          placeholder={x.token_set ? 'paste a new token to replace it' : x.kind === 'github' ? 'github_pat_…' : 'token'}
+          value={token} onChange={(e) => setToken(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && token.trim() && !busy) save.mutate() }}
+        />
+        <Button variant="primary" disabled={busy || !token.trim()} onClick={() => save.mutate()}>{save.isPending ? 'checking…' : x.token_set ? 'Replace' : 'Save'}</Button>
+        {x.token_set && <Button disabled={busy} onClick={() => check.mutate()}>{check.isPending ? 'checking…' : 'Check again'}</Button>}
+        {x.token_set && (
+          <Button variant="danger" disabled={busy} onClick={() => { if (window.confirm(`Clear the ${x.name} token? Lamplighter will read anonymously and deliver nothing there.`)) clear.mutate() }}>Clear</Button>
+        )}
+      </div>
+      <p className="mt-2 text-[11px] text-stone-500">
+        Kept in Lamplighter’s database and never shown again. It takes effect at once, and it is checked every
+        half hour. Only this page can set it: the chat and the admin MCP cannot choose whose name Lamplighter pushes under.
+        {x.kind === 'github' && usesNoreply && a.login && <> Commits are authored as <code>{identity.name || 'Lamplighter'} &lt;{a.user_id}+{a.login}@users.noreply.github.com&gt;</code> (General → commit author email is empty), so GitHub attributes them to {a.login}.</>}
+      </p>
+      <ErrorNote error={save.error || clear.error || check.error} />
+    </div>
   )
 }
 

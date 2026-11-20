@@ -36,6 +36,13 @@ export default function Repo() {
         </div>
       </div>
       <ErrorNote error={fetchNow.error || runAll.error} />
+      {!r.write.ok && (
+        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
+          <strong>Fixing is blocked on this repository.</strong> {r.write.why} Lamplighter keeps running rounds and
+          writing reports, but drafts, validates and delivers no fix here until it has write access, so nothing is
+          authored only to fail at the push. <Link className="underline" to="/settings">Settings → Forges</Link>
+        </div>
+      )}
       <ChecksCard r={r} refresh={refresh} />
       <FindingsCard findings={r.findings} refresh={refresh} />
       <div className="grid gap-4 lg:grid-cols-2">
@@ -112,6 +119,7 @@ function ChecksCard({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
           </thead>
           <tbody>
             {r.checks.map((c) => {
+              const blocked = !r.write.ok
               const lamp = r.lamps[c.kind]
               const overridden = !!own[c.kind]
               return (
@@ -123,15 +131,15 @@ function ChecksCard({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
                   <td className="px-2 py-2"><input type="checkbox" checked={c.settings.enabled} onChange={(e) => patch(c.kind, { enabled: e.target.checked })} /></td>
                   <td className="px-2 py-2">
                     <select className={`${inputCls} !w-auto !py-1`} value={c.settings.delivery} onChange={(e) => patch(c.kind, { delivery: e.target.value as CheckSettings['delivery'] })}>
-                        {['report', 'branch', 'pr', 'push'].map((d) => <option key={d} value={d}>{d}</option>)}
+                        {['report', 'branch', 'pr', 'push'].map((d) => <option key={d} value={d} disabled={blocked && d !== 'report'}>{d}{blocked && d !== 'report' ? ' (no write access)' : ''}</option>)}
                     </select>
                   </td>
-                  <td className="px-2 py-2"><input type="checkbox" checked={c.settings.armed} onChange={(e) => patch(c.kind, { armed: e.target.checked })} /></td>
-                  <td className="px-2 py-2"><input type="checkbox" checked={c.settings.auto_submit} onChange={(e) => patch(c.kind, { auto_submit: e.target.checked })} /></td>
+                  <td className="px-2 py-2"><input type="checkbox" disabled={blocked} title={blocked ? 'blocked: no write access' : undefined} checked={c.settings.armed} onChange={(e) => patch(c.kind, { armed: e.target.checked })} /></td>
+                  <td className="px-2 py-2"><input type="checkbox" disabled={blocked} title={blocked ? 'blocked: no write access' : undefined} checked={c.settings.auto_submit} onChange={(e) => patch(c.kind, { auto_submit: e.target.checked })} /></td>
                   <td className="px-2 py-2 text-xs text-stone-500">{lamp?.status ? <Badge tone={stateTone(lamp.status)}>{lamp.status}</Badge> : null} {ago(lamp?.last)}</td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">
                     <Button className="!px-2 !py-1 text-xs" onClick={() => round.mutate({ check: c.kind, scope: 'full' })}>Round</Button>{' '}
-                    {c.settings.delivery !== 'report' && <Button className="!px-2 !py-1 text-xs" onClick={() => fix.mutate(c.kind)} disabled={!lamp?.open}>Fix</Button>}
+                    {c.settings.delivery !== 'report' && <Button className="!px-2 !py-1 text-xs" onClick={() => fix.mutate(c.kind)} disabled={blocked || !lamp?.open} title={blocked ? 'blocked: no write access' : undefined}>Fix</Button>}
                   </td>
                 </tr>
               )
