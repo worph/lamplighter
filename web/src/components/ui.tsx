@@ -52,7 +52,7 @@ export function stateTone(s: string): 'stone' | 'amber' | 'red' | 'green' | 'blu
 }
 
 const LAMP: Record<LampState, { cls: string; label: string }> = {
-  lit: { cls: 'bg-amber-400 shadow-[0_0_8px_2px_rgba(251,191,36,0.55)]', label: 'lit — clean as of the last round' },
+  lit: { cls: 'bg-emerald-500 shadow-[0_0_8px_2px_rgba(16,185,129,0.55)]', label: 'lit — clean as of the last round' },
   dim: { cls: 'bg-amber-700/70 dark:bg-amber-800', label: 'dim — open findings' },
   out: { cls: 'bg-red-500', label: 'out — last round blocked or failed' },
   unlit: { cls: 'bg-stone-300 dark:bg-stone-700', label: 'unlit — never run' },

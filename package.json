@@ -1,6 +1,6 @@
 {
   "name": "lamplighter",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "A self-hosted, LLM-centric maintainer for a fleet of repositories",
   "license": "UNLICENSED",
