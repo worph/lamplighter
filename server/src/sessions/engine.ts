@@ -5,6 +5,7 @@ import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
 import { lastDismissal, reconcile, type FindingRow } from '../findings/index.js'
 import { forgeApi, forgeRow } from '../forges/index.js'
+import { commitIdentity, writeAccess } from '../forges/auth.js'
 import { git } from '../forges/gitcli.js'
 import { ownBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
 import { driverFor } from '../inference/index.js'
@@ -192,6 +193,8 @@ export function maybePropose(app: App, repo: RepoRow, def: CheckDef, foreground 
   const s = settingsFor(app, repo, def)
   if (!s.enabled) return 'check disabled'
   if (s.delivery === 'report') return 'delivery is report'
+  const access = writeAccess(app, repo)
+  if (!access.ok) return `blocked: ${access.why}`
   if (!foreground && !s.armed) return 'check not armed'
   const inflight = app.db
     .prepare("SELECT id FROM proposals WHERE repo_key = ? AND check_kind = ? AND state IN ('drafting','validating','ready','held','submitted')")
@@ -223,6 +226,8 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
   const def = checkOf(app, job.check_kind)
   const findings = proposalCandidates(app, repo.key, def.kind)
   if (!findings.length) return undefined
+  // Queued before access was lost: drop it rather than author a fix nobody can deliver.
+  if (!writeAccess(app, repo).ok) return undefined
   const base = await app.mirrors.fetch(repo)
   const s = settingsFor(app, repo, def)
   const forge = forgeRow(app.db, repo.forge_id)
@@ -258,7 +263,7 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
       return pid
     }
     const summary = session.done?.text ?? result.text
-    const id = app.config.current.identity
+    const id = commitIdentity(app, repo.forge_id)
     await git(['add', '-A'], { cwd: worktree })
     await git(['commit', '-q', '-F', '-'], {
       cwd: worktree,

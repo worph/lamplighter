@@ -34,12 +34,41 @@ export class GitHubForge implements ForgeApi {
   }
 
   async probe(): Promise<ForgeHealth> {
-    if (!this.row.token) return { ok: true, detail: 'anonymous (public repos, report only)' }
+    if (!this.row.token) return { ok: true, detail: 'anonymous: reads public repos, cannot push' }
     try {
       const me = await this.req<{ login: string }>('/user')
       return { ok: true, detail: `authenticated as ${me.login}` }
     } catch (err) {
       return { ok: false, detail: (err as Error).message }
+    }
+  }
+
+  async whoami(): Promise<{ login: string; id: number }> {
+    return this.req<{ login: string; id: number }>('/user')
+  }
+
+  /**
+   * The account's role first (a token cannot do more than its account may), then the token's own
+   * grant, which is narrower: an empty blob is a 422 when Contents is writable and a 403 when the
+   * fine-grained token was not given it. Nothing is created either way. (Touchstone's probe.)
+   */
+  async canPush(owner: string, name: string): Promise<{ push: boolean; detail?: string }> {
+    let repo: { permissions?: { push?: boolean } }
+    try {
+      repo = await this.req(`/repos/${owner}/${name}`)
+    } catch (err) {
+      const status = (err as { status?: number }).status
+      return { push: false, detail: status === 404 ? 'the token cannot see this repository' : (err as Error).message }
+    }
+    if (!repo.permissions?.push) return { push: false, detail: 'the account cannot push here' }
+    try {
+      await this.req(`/repos/${owner}/${name}/git/blobs`, { method: 'POST', body: {} })
+      return { push: true }
+    } catch (err) {
+      const status = (err as { status?: number }).status
+      if (status === 422) return { push: true }
+      if (status === 403 || status === 404) return { push: false, detail: 'the token was not given Contents: Read and write for this repository' }
+      return { push: true, detail: `could not confirm the token's grant: ${(err as Error).message}` }
     }
   }
 

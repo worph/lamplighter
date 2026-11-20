@@ -9,6 +9,7 @@ import { listItems } from '../activity/index.js'
 import { addRepo, getRepo, listRepos, parseSettings, getGroup } from '../repos/registry.js'
 import { enqueueRound } from '../scheduler/index.js'
 import { maybePropose } from '../sessions/engine.js'
+import { writeAccess } from '../forges/auth.js'
 import { deliver, getProposal, mergeBranch, rejectProposal, revertPush } from '../delivery/index.js'
 
 /**
@@ -46,6 +47,7 @@ export const ADMIN_TOOLS: AdminTool[] = [
         .all() as { repo_key: string; check_kind: string; n: number }[]
       return listRepos(app.db).map((r) => ({
         key: r.key, line: r.line, visibility: r.visibility, group: r.group_id, head: r.last_head?.slice(0, 10) ?? null, fetch_error: r.fetch_error,
+        write: writeAccess(app, r),
         open: Object.fromEntries(counts.filter((c) => c.repo_key === r.key).map((c) => [c.check_kind, c.n])),
       }))
     },

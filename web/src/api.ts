@@ -31,6 +31,11 @@ export interface Lamp {
   status?: string
 }
 
+export interface WriteAccess {
+  ok: boolean
+  why?: string
+}
+
 export interface RepoSummary {
   key: string
   forge_id: string
@@ -43,6 +48,8 @@ export interface RepoSummary {
   last_fetch_at: string | null
   fetch_error: string | null
   lamps: Record<string, Lamp>
+  /** No means the fixing loop is blocked on this repo: rounds and reports only. */
+  write: WriteAccess
 }
 
 export interface CheckSettings {
@@ -104,6 +111,7 @@ export interface ProposalRow {
   sensitive?: number
   validation?: { ok: boolean; round: string; verdict: string; remaining: { title: string; anchor: string; category: string; body: string }[] } | null
   findings?: { id: string; title: string; anchor: string; category: string; severity: string; state: string }[]
+  write?: WriteAccess
   created_at: string
   updated_at: string
 }
@@ -174,8 +182,21 @@ export interface Forge {
   name: string
   base_url: string | null
   username: string | null
-  token: string | null
+  /** Write-only: the page learns whether a token is set and what its check found, never the token. */
+  token_set: boolean
+  token_set_at: string | null
   webhook_secret: string | null
+  auth: ForgeAuth
+  repos: string[]
+}
+
+export interface ForgeAuth {
+  state: 'unconfigured' | 'unknown' | 'ok' | 'failing'
+  login?: string
+  user_id?: number
+  repos?: { repo: string; push: boolean; detail?: string }[]
+  problems: string[]
+  checked_at?: string
 }
 
 export interface SettingsView {
@@ -238,6 +259,9 @@ export const api = {
   addForge: (b: Record<string, unknown>) => request('/api/v1/forges', { method: 'POST', json: b }),
   patchForge: (id: string, b: Record<string, unknown>) => request(`/api/v1/forges/${id}`, { method: 'PATCH', json: b }),
   deleteForge: (id: string) => request(`/api/v1/forges/${id}`, { method: 'DELETE' }),
+  setForgeToken: (id: string, token: string) => request<ForgeAuth>(`/api/v1/forges/${id}/token`, { method: 'PUT', json: { token } }),
+  clearForgeToken: (id: string) => request<ForgeAuth>(`/api/v1/forges/${id}/token`, { method: 'DELETE' }),
+  checkForge: (id: string) => request<ForgeAuth>(`/api/v1/forges/${id}/auth/check`, { method: 'POST' }),
   probeForge: (id: string) => request<{ ok: boolean; detail: string }>(`/api/v1/forges/${id}/probe`, { method: 'POST' }),
   discover: (id: string, owner: string) => request<{ owner: string; name: string; defaultBranch: string; visibility: string; enrolled: boolean }[]>(`/api/v1/forges/${id}/discover?owner=${encodeURIComponent(owner)}`),
   addGroup: (b: { id: string; name: string }) => request('/api/v1/groups', { method: 'POST', json: b }),

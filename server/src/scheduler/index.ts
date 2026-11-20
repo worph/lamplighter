@@ -4,6 +4,7 @@ import { logEvent } from '../events.js'
 import { listRepos, getRepo, type RepoRow } from '../repos/registry.js'
 import { alert, runAuthor, runRound, settingsFor, type QueueRow } from '../sessions/engine.js'
 import { pollPullRequests } from '../delivery/index.js'
+import { checkAllForges } from '../forges/auth.js'
 
 /**
  * One queue, served in order (Touchstone's model): foreground (what a person asked for, first in
@@ -55,6 +56,7 @@ export class Scheduler {
   private ticking = false
   private running = new Map<string, Promise<void>>()
   private lastPrPoll = 0
+  private lastAuthCheck = 0
 
   constructor(private readonly app: App) {
     // A job that was running when the process died never finished: put it back in line.
@@ -89,6 +91,12 @@ export class Scheduler {
       if (!cfg.enabled) return
       await this.poll()
       if (cfg.rotation) this.rotate()
+      // Tokens expire and get revoked: re-check every half hour (and on the first tick), so the
+      // alert opens before a delivery finds out.
+      if (Date.now() - this.lastAuthCheck > 30 * 60_000) {
+        this.lastAuthCheck = Date.now()
+        await checkAllForges(this.app).catch(() => undefined)
+      }
       if (Date.now() - this.lastPrPoll > 5 * 60_000) {
         this.lastPrPoll = Date.now()
         await pollPullRequests(this.app).catch(() => undefined)

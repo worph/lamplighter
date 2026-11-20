@@ -88,7 +88,9 @@ Where only a model can see it, the model does both, and the result is held to th
 4. **Delivery.** Per check, per repo group, per repo, for every check alike: `report` (the round's
    report lands in Activity, no code), `branch`, `pr` or `push`, each
    with an *auto-submit* switch saying whether a person approves first. Bare git has no PRs, so
-   it is `branch` or `push` only.
+   it is `branch` or `push` only. The forge token is set in Settings → Forges, Touchstone-style
+   (write-only, checked on save); a repo the token cannot push to is **blocked from fixing**
+   (rounds and reports only) and says so in the UI.
 5. **Activity.** Everything that needs a person lands in Activity, Newsdesk-style: a PR to
    review, a branch to merge, a report to read, a proposal to approve, an alert. Each item has its
    actions inline (approve, reject, dismiss with reason, snooze), and every decision is recorded
