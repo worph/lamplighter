@@ -96,7 +96,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
       settings: parseSettings(r.settings_json),
       group,
       lamps: lamps(app, key),
-      checks: app.checks.list().map((def) => ({ kind: def.kind, title: def.title, scopes: def.scopes, fixable: def.fixable, agent: def.agent, settings: settingsFor(app, r, def) })),
+      checks: app.checks.list().map((def) => ({ kind: def.kind, title: def.title, scopes: def.scopes, agent: def.agent, settings: settingsFor(app, r, def) })),
       findings: listFindings(app.db, { repo: key, limit: 500 }).map((x) => ({ ...x, dismissal: x.state === 'dismissed' ? lastDismissal(app.db, x.id) : undefined })),
       rounds: app.db.prepare('SELECT id, check_kind, kind, scope, status, summary, error, trigger, base_sha, head_sha, proposal_id, started_at, ended_at FROM rounds WHERE repo_key = ? ORDER BY started_at DESC LIMIT 60').all(key),
       proposals: app.db.prepare('SELECT id, check_kind, state, delivery, branch, base_sha, head_sha, summary, error, submitted_ref, created_at, updated_at FROM proposals WHERE repo_key = ? ORDER BY created_at DESC LIMIT 30').all(key),
@@ -207,7 +207,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
       admin_mcp_token: masked(getSetting(app.db, SETTING.adminMcpToken)),
       forges: listForges(app.db).map((x) => ({ ...x, token: masked(x.token), webhook_secret: x.webhook_secret ? '••••' : null })),
       groups: listGroups(app.db),
-      checks: app.checks.list().map((c) => ({ kind: c.kind, title: c.title, revision: c.revision, scopes: c.scopes, agent: c.agent, fixable: c.fixable, sensitive: c.sensitive, defaults: c.defaults, settings: { ...c.defaults, ...(cfg.checks[c.kind] ?? {}) } })),
+      checks: app.checks.list().map((c) => ({ kind: c.kind, title: c.title, revision: c.revision, scopes: c.scopes, agent: c.agent, sensitive: c.sensitive, defaults: c.defaults, settings: { ...c.defaults, ...(cfg.checks[c.kind] ?? {}) } })),
       check_errors: app.checks.errors,
       schedule: app.schedule(),
     }

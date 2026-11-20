@@ -54,16 +54,19 @@ public and private, across GitHub, Gitea and plain git remotes.
 Nine kinds of check, each a file on the data volume (prompt, detectors, defaults) rather than code,
 so they can be tuned without a rebuild, the same way Touchstone's protocols are:
 
+Every check takes every delivery mode. The column below is only the seeded default; the maintainer
+picks `report`, `branch`, `pr` or `push` per check (globally, per group, per repo).
+
 | Check | Found by | Default delivery |
 |---|---|---|
 | `docs`: README/CLAUDE.md/docs drift from the code | diff since last doc touch + LLM | **push** |
-| `cve`: known vulnerabilities in dependencies | OSV over the lockfile | **report** (v1; fixes need a package-manager run) |
-| `deps`: outdated dependencies | npm registry lookup | **report** (v1, same reason) |
+| `cve`: known vulnerabilities in dependencies | OSV over the lockfile | **report** (a fix bumps the manifest; `npm install` refreshes the lockfile) |
+| `deps`: outdated dependencies | npm registry lookup | **report** (same) |
 | `dead-code`: unused exports, files, deps | LLM, proving each one with grep | **pr** |
 | `refactor`: duplication, oversized units | LLM | **pr** |
 | `quality`: cleaning, consistency, lint debt | LLM | **pr** |
 | `patterns`: known bad patterns, anti-idioms | LLM | **pr** |
-| `architecture`: structure, boundaries, drift | LLM only | **report**: no code, ever |
+| `architecture`: structure, boundaries, drift | LLM only | **report** (a fix is a small structural step) |
 | `security`: design-level and code-level review | LLM | **branch**, private (see below) |
 
 Where a deterministic tool can detect something, the tool detects it and the LLM judges and fixes.
@@ -82,7 +85,8 @@ Where only a model can see it, the model does both, and the result is held to th
    change in a throwaway worktree and Lamplighter commits it. **The session that wrote a fix
    never judges it**: a fresh, independent session reviews the diff and must find the issues gone
    and nothing new. (Running the repo's build and tests needs a runner, which is later work.)
-4. **Delivery.** Per check, per repo group, per repo: `report`, `branch`, `pr` or `push`, each
+4. **Delivery.** Per check, per repo group, per repo, for every check alike: `report` (the round's
+   report lands in Activity, no code), `branch`, `pr` or `push`, each
    with an *auto-submit* switch saying whether a person approves first. Bare git has no PRs, so
    it is `branch` or `push` only.
 5. **Activity.** Everything that needs a person lands in Activity, Newsdesk-style: a PR to
@@ -151,4 +155,4 @@ points at the box's Beacon and claude-code out of the box. Details in
 | | Contents |
 |---|---|
 | **v1** ✅ | GitHub / Gitea / bare git, bare clones, polling + webhooks + loop guard; nine check files; OSV and npm detectors; LLM review, fix and independent validation sessions through a workspace toolset; claude-code and OpenAI-compatible drivers; findings with dedup and dismissal memory; delivery report / branch / PR / push with approve, reject, merge, revert and PR follow-up; scheduler with tiers, debounce, slots, session budget and attention caps; Chat, Repos, Activity, Settings; admin MCP |
-| **next** | a credential-free runner (tests, package managers, scanners) → mechanical validation and fixable `cve`/`deps`; GitHub private advisories; batching of cleanup PRs; web push; policy-from-overrides review; onboarding the ~200-repo fleet in waves |
+| **next** | a credential-free runner (tests, package managers, scanners) → mechanical validation and lockfile regeneration for `cve`/`deps` fixes; GitHub private advisories; batching of cleanup PRs; web push; policy-from-overrides review; onboarding the ~200-repo fleet in waves |

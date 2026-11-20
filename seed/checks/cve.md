@@ -1,14 +1,18 @@
 ---
 kind: cve
 title: Known vulnerabilities
-revision: 1
+revision: 2
 scopes: [diff, full]
 agent: none
 detectors: [osv]
 categories: [vulnerable-dependency]
-fixable: false
 defaults: { enabled: true, delivery: report, auto_submit: false, armed: false, cadence_days: 1 }
 ---
 Detector-only in v1: every package in the lockfile is queried against OSV (api.osv.dev).
-A finding per vulnerable package version. Fixes need a lockfile regeneration, which needs a
-package manager run — not available to v1's file-only sessions, so this check reports.
+A finding per vulnerable package version.
+
+When fixing: raise the dependency's range in the manifest (package.json) to the first version
+the advisory lists as fixed, for a direct dependency; for a transitive one, add an `overrides`
+entry. Sessions edit files only and cannot run a package manager, so do not hand-edit the
+lockfile's resolved/integrity fields: say in the summary that `npm install` must be run to
+refresh the lockfile before this lands.

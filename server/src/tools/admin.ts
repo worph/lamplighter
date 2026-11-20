@@ -125,7 +125,7 @@ export const ADMIN_TOOLS: AdminTool[] = [
     schema: z.object({}),
     async run(app) {
       return app.checks.list().map((c) => ({
-        kind: c.kind, title: c.title, revision: c.revision, scopes: c.scopes, agent: c.agent, fixable: c.fixable, sensitive: c.sensitive,
+        kind: c.kind, title: c.title, revision: c.revision, scopes: c.scopes, agent: c.agent, sensitive: c.sensitive,
         settings: { ...c.defaults, ...(app.config.current.checks[c.kind] ?? {}) },
       }))
     },

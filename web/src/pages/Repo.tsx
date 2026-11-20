@@ -122,18 +122,16 @@ function ChecksCard({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
                   </td>
                   <td className="px-2 py-2"><input type="checkbox" checked={c.settings.enabled} onChange={(e) => patch(c.kind, { enabled: e.target.checked })} /></td>
                   <td className="px-2 py-2">
-                    {c.fixable ? (
-                      <select className={`${inputCls} !w-auto !py-1`} value={c.settings.delivery} onChange={(e) => patch(c.kind, { delivery: e.target.value as CheckSettings['delivery'] })}>
+                    <select className={`${inputCls} !w-auto !py-1`} value={c.settings.delivery} onChange={(e) => patch(c.kind, { delivery: e.target.value as CheckSettings['delivery'] })}>
                         {['report', 'branch', 'pr', 'push'].map((d) => <option key={d} value={d}>{d}</option>)}
-                      </select>
-                    ) : <Badge>report only</Badge>}
+                    </select>
                   </td>
-                  <td className="px-2 py-2"><input type="checkbox" disabled={!c.fixable} checked={c.settings.armed} onChange={(e) => patch(c.kind, { armed: e.target.checked })} /></td>
-                  <td className="px-2 py-2"><input type="checkbox" disabled={!c.fixable} checked={c.settings.auto_submit} onChange={(e) => patch(c.kind, { auto_submit: e.target.checked })} /></td>
+                  <td className="px-2 py-2"><input type="checkbox" checked={c.settings.armed} onChange={(e) => patch(c.kind, { armed: e.target.checked })} /></td>
+                  <td className="px-2 py-2"><input type="checkbox" checked={c.settings.auto_submit} onChange={(e) => patch(c.kind, { auto_submit: e.target.checked })} /></td>
                   <td className="px-2 py-2 text-xs text-stone-500">{lamp?.status ? <Badge tone={stateTone(lamp.status)}>{lamp.status}</Badge> : null} {ago(lamp?.last)}</td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">
                     <Button className="!px-2 !py-1 text-xs" onClick={() => round.mutate({ check: c.kind, scope: 'full' })}>Round</Button>{' '}
-                    {c.fixable && c.settings.delivery !== 'report' && <Button className="!px-2 !py-1 text-xs" onClick={() => fix.mutate(c.kind)} disabled={!lamp?.open}>Fix</Button>}
+                    {c.settings.delivery !== 'report' && <Button className="!px-2 !py-1 text-xs" onClick={() => fix.mutate(c.kind)} disabled={!lamp?.open}>Fix</Button>}
                   </td>
                 </tr>
               )
