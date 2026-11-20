@@ -140,9 +140,7 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
     const report = `# ${def.title} — ${scope} round\n\n${repo.key} @ \`${head.slice(0, 10)}\`${scope === 'diff' ? ` (since \`${job.base_sha!.slice(0, 10)}\`)` : ''}\n\n${narrative}\n\n## Findings this round\n\n${renderFindings(touched)}\n\n_${summary}_`
     endRound(app, id, { status: 'done', summary, report, usage })
     logEvent(app.db, { code: 'ROUND_DONE', repo: repo.key, message: `${def.kind} ${scope} round: ${summary}`, detail: { round: id } })
-    if (def.kind === 'architecture' && scope === 'full') {
-      addItem(app.db, { kind: 'report', repo: repo.key, ref: id, title: `Architecture review of ${repo.key}`, body: summary })
-    }
+    maybeReport(app, repo, def, { id, scope, summary, fresh: rec.created + rec.reopened })
     maybePropose(app, repo, def)
     return id
   } catch (err) {
@@ -159,6 +157,26 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
   }
 }
 
+/**
+ * Delivery `report`, whatever the check: the round itself is what a person gets, as an Activity
+ * item. One per round that surfaced something (new or reopened findings), plus every full LLM
+ * review, whose narrative is worth reading on its own. A newer report supersedes the unread one
+ * for the same repo and check, so a daily check does not stack items.
+ */
+function maybeReport(app: App, repo: RepoRow, def: CheckDef, r: { id: string; scope: 'diff' | 'full'; summary: string; fresh: number }) {
+  const s = settingsFor(app, repo, def)
+  if (!s.enabled || s.delivery !== 'report') return
+  if (r.fresh === 0 && !(r.scope === 'full' && def.agent !== 'none')) return
+  app.db
+    .prepare(
+      `UPDATE activity SET state = 'resolved', resolution = 'superseded', resolved_at = ?
+        WHERE kind = 'report' AND state = 'open' AND repo_key = ?
+          AND ref_id IN (SELECT id FROM rounds WHERE repo_key = ? AND check_kind = ?)`,
+    )
+    .run(now(), repo.key, repo.key, def.kind)
+  addItem(app.db, { kind: 'report', repo: repo.key, ref: r.id, title: `${def.title} — ${repo.key}`, body: r.summary, sensitive: def.sensitive === 'always' })
+}
+
 function proposalCandidates(app: App, repo: string, check: string): FindingRow[] {
   return app.db
     .prepare(
@@ -173,7 +191,7 @@ function proposalCandidates(app: App, repo: string, check: string): FindingRow[]
 export function maybePropose(app: App, repo: RepoRow, def: CheckDef, foreground = false): 'queued' | string {
   const s = settingsFor(app, repo, def)
   if (!s.enabled) return 'check disabled'
-  if (!def.fixable || s.delivery === 'report') return 'check is report-only'
+  if (s.delivery === 'report') return 'delivery is report'
   if (!foreground && !s.armed) return 'check not armed'
   const inflight = app.db
     .prepare("SELECT id FROM proposals WHERE repo_key = ? AND check_kind = ? AND state IN ('drafting','validating','ready','held','submitted')")

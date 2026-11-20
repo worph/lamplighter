@@ -72,8 +72,10 @@ Apps/Lamplighter/     store listing for a Yundera box: backend + beaconify + App
    `CLAUDE.md`, the scope, and the findings already known (with ids, so the model can link a
    repeat). The findings it records are reconciled (`findings/index.ts`): same fingerprint or
    `existing_id` means the same finding, a dismissal holds while the anchor's blob is unchanged,
-   and a full round retires open findings it no longer sees. The round's report is stored.
-4. **Proposal.** If the check is fixable and its delivery is not `report`, and it is armed (or a
+   and a full round retires open findings it no longer sees. The round's report is stored; with
+   delivery `report` it also becomes an Activity item (new or reopened findings, or a full LLM
+   review), superseding the unread one for that repo and check.
+4. **Proposal.** If the check's delivery is not `report` (any check, see below), and it is armed (or a
    person pressed Fix), and the repo is under its attention cap, and nothing is already in flight
    for that check, then an author job takes up to eight open findings. A fixing session edits
    the worktree; Lamplighter commits (identity from config, trailers) onto
@@ -197,7 +199,7 @@ Releases: tag, build and push `ghcr.io/worph/lamplighter:<v>`, then bump the ima
 
 | Item | Why |
 |---|---|
-| A credential-free **runner** sidecar (tests, package managers, scanners in a worktree copy) | mechanical validation (architecture §7.3 step 1); fixable `cve`/`deps`; semgrep/knip as detector hints |
+| A credential-free **runner** sidecar (tests, package managers, scanners in a worktree copy) | mechanical validation (architecture §7.3 step 1); lockfile regeneration for `cve`/`deps` fixes; semgrep/knip as detector hints |
 | GitHub **private advisory** delivery for sensitive fixes on public repos | replaces "held + typed confirmation" |
 | **Batching** (`weekly` cleanup PRs, one commit per finding) | review attention at fleet scale |
 | Read `check_status.recommendedMaxConcurrent` | slots that follow the shared backend's memory |

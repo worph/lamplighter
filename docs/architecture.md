@@ -151,8 +151,11 @@ Default shape of the nine:
 | refactor | review | full | pr | weekly |
 | quality | triage | diff, full | pr | weekly |
 | patterns | triage | diff, full | pr | weekly |
-| architecture | review | full | **report** | n/a |
+| architecture | review | full | report | n/a |
 | security | review | diff, full | branch, sensitive: always | per-finding |
+
+The default delivery is only a seed: **every check accepts every mode** (`report`, `branch`, `pr`,
+`push`), chosen by the maintainer per check, group or repo. No check is report-only by nature.
 
 `deps` is a registry lookup and nothing else until a bump breaks the build: only then does an
 agent session start, to fix the breakage. That is the part Renovate does not do.
@@ -191,8 +194,10 @@ open ─────┼──────── person dismisses (reason) ──
 ### 6.3 Reports
 
 Each round also writes a markdown report (`data/rounds/<repo>/<check>/<round-id>.md`) for a person
-to read. For `architecture` this report *is* the product. The database stores findings as rows;
-the report is the narrative around them.
+to read. The database stores findings as rows; the report is the narrative around them. When a
+check's delivery is `report`, the report is what the maintainer gets: an Activity item for each
+round that surfaced new or reopened findings, and for every full LLM review. A newer one
+supersedes the unread one for the same repo and check.
 
 ---
 
@@ -439,7 +444,7 @@ below the first row.
 
 1. **A runner for tests and scanners**: a credential-free sidecar that runs commands in a
    worktree copy (tests, `npm install` for lockfile fixes, semgrep, knip). It unlocks mechanical
-   validation (§7.3 step 1) and fixable `cve`/`deps`.
+   validation (§7.3 step 1) and lockfile regeneration for `cve`/`deps` fixes.
 2. **Concurrency at 200 repos** is `schedule.slots` against one shared backend; the claude-code
    container advises a ceiling (`check_status.recommendedMaxConcurrent`) that v1 does not read yet.
 3. **Monorepos with submodules** (yundera-root, meta-root-v2): proposed rule is that each submodule

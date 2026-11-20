@@ -23,8 +23,6 @@ const frontSchema = z.object({
   detectors: z.array(z.enum(['osv', 'npm-outdated'])).default([]),
   categories: z.array(z.string()).min(1),
   sensitive: z.enum(['never', 'always']).default('never'),
-  /** Whether a proposal can exist at all. `architecture` is report-only by nature. */
-  fixable: z.boolean().default(true),
   defaults: z.object({
     enabled: z.boolean(),
     delivery: z.enum(DELIVERIES),
@@ -85,12 +83,14 @@ export function resolveSettings(
 ): ResolvedSettings {
   const pick = (s: Record<string, unknown>) =>
     ((s.checks as Record<string, CheckSettings> | undefined)?.[def.kind] ?? {}) as CheckSettings
+  // Every check takes every delivery mode: what lands (a report, a branch, a PR, a push) is the
+  // maintainer's choice per check, not a property of the check. (A volume file from 0.2 may still
+  // carry `fixable: false`; it is ignored.)
   const merged = {
     ...def.defaults,
     ...(config.checks[def.kind] ?? {}),
     ...pick(groupSettings),
     ...pick(repoSettings),
   }
-  if (!def.fixable) merged.delivery = 'report'
   return merged as ResolvedSettings
 }

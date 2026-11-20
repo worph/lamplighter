@@ -183,12 +183,12 @@ function Checks({ s }: { s: SettingsView }) {
               <tr key={c.kind} className="border-b last:border-0 border-stone-100 dark:border-stone-800/70">
                 <td className="px-4 py-2"><div className="font-medium">{c.title}</div><div className="text-[11px] text-stone-500">{c.kind} · rev {c.revision} · {c.agent === 'none' ? 'detector' : 'LLM'} · {c.scopes.join('+')}{c.sensitive === 'always' ? ' · sensitive' : ''}</div></td>
                 <td className="px-2 py-2"><input type="checkbox" checked={c.settings.enabled} onChange={(e) => put.mutate({ check: c.kind, p: { enabled: e.target.checked } })} /></td>
-                <td className="px-2 py-2">{c.fixable ? (
+                <td className="px-2 py-2">
                   <select className={`${inputCls} !w-auto !py-1`} value={c.settings.delivery} onChange={(e) => put.mutate({ check: c.kind, p: { delivery: e.target.value as CheckSettings['delivery'] } })}>
                     {['report', 'branch', 'pr', 'push'].map((d) => <option key={d}>{d}</option>)}
-                  </select>) : <Badge>report only</Badge>}</td>
-                <td className="px-2 py-2"><input type="checkbox" disabled={!c.fixable} checked={c.settings.armed} onChange={(e) => put.mutate({ check: c.kind, p: { armed: e.target.checked } })} /></td>
-                <td className="px-2 py-2"><input type="checkbox" disabled={!c.fixable} checked={c.settings.auto_submit} onChange={(e) => put.mutate({ check: c.kind, p: { auto_submit: e.target.checked } })} /></td>
+                  </select></td>
+                <td className="px-2 py-2"><input type="checkbox" checked={c.settings.armed} onChange={(e) => put.mutate({ check: c.kind, p: { armed: e.target.checked } })} /></td>
+                <td className="px-2 py-2"><input type="checkbox" checked={c.settings.auto_submit} onChange={(e) => put.mutate({ check: c.kind, p: { auto_submit: e.target.checked } })} /></td>
                 <td className="px-2 py-2"><input type="number" min={1} className={`${inputCls} !w-20 !py-1`} defaultValue={c.settings.cadence_days} onBlur={(e) => Number(e.target.value) !== c.settings.cadence_days && put.mutate({ check: c.kind, p: { cadence_days: Number(e.target.value) } })} /></td>
               </tr>
             ))}

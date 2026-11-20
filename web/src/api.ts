@@ -161,7 +161,7 @@ export interface RepoDetail extends RepoSummary {
   policy: string
   settings: { checks?: Record<string, Partial<CheckSettings>> }
   group: { id: string; name: string; policy: string }
-  checks: { kind: string; title: string; scopes: string[]; fixable: boolean; agent: string; settings: CheckSettings }[]
+  checks: { kind: string; title: string; scopes: string[]; agent: string; settings: CheckSettings }[]
   findings: Finding[]
   rounds: RoundRow[]
   proposals: ProposalRow[]
@@ -190,7 +190,7 @@ export interface SettingsView {
   admin_mcp_token: string | null
   forges: Forge[]
   groups: { id: string; name: string; policy: string }[]
-  checks: { kind: string; title: string; revision: number; scopes: string[]; agent: string; fixable: boolean; sensitive: string; defaults: CheckSettings; settings: CheckSettings }[]
+  checks: { kind: string; title: string; revision: number; scopes: string[]; agent: string; sensitive: string; defaults: CheckSettings; settings: CheckSettings }[]
   check_errors: string[]
   schedule: Schedule
 }

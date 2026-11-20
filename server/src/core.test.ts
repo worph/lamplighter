@@ -142,12 +142,13 @@ describe('extractJson', () => {
 
 describe('settings precedence', () => {
   it('default → config → group → repo', () => {
-    const def = { kind: 'docs', fixable: true, defaults: { enabled: true, delivery: 'push', auto_submit: true, armed: true, cadence_days: 7 } } as unknown as CheckDef
+    const def = { kind: 'docs', defaults: { enabled: true, delivery: 'push', auto_submit: true, armed: true, cadence_days: 7 } } as unknown as CheckDef
     const config = configSchema.parse({ checks: { docs: { delivery: 'pr' } } })
     const s = resolveSettings(def, config, { checks: { docs: { armed: false } } }, { checks: { docs: { delivery: 'branch' } } })
     expect(s).toMatchObject({ delivery: 'branch', armed: false, auto_submit: true, cadence_days: 7 })
-    const report = resolveSettings({ ...def, fixable: false } as CheckDef, config, {}, {})
-    expect(report.delivery).toBe('report')
+    // No check is locked to `report`: a legacy `fixable: false` is ignored.
+    const legacy = resolveSettings({ ...def, fixable: false } as unknown as CheckDef, config, {}, { checks: { docs: { delivery: 'pr' } } })
+    expect(legacy.delivery).toBe('pr')
   })
 })
 
