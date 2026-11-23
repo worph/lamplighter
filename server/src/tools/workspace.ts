@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import picomatch from 'picomatch'
 import { z } from 'zod'
@@ -18,7 +18,7 @@ const MAX_LINES = 400
 
 export class ToolInputError extends Error {}
 
-/** Resolve a repo-relative path inside the worktree, refusing escapes and the git metadata. */
+/** Resolve a repo-relative path inside the worktree, refusing escapes (lexical and via symlinks) and the git metadata. */
 export function checkRel(worktree: string, p: unknown): string {
   if (typeof p !== 'string' || !p.trim()) throw new ToolInputError('path is required')
   const clean = p.replace(/\\/g, '/').replace(/^\.\//, '')
@@ -27,6 +27,33 @@ export function checkRel(worktree: string, p: unknown): string {
   const rel = relative(worktree, abs)
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new ToolInputError(`path escapes the repository: ${p}`)
   if (rel.split(sep)[0] === '.git') throw new ToolInputError('the .git directory is not part of the workspace')
+
+  // Symlinks: resolve the deepest existing component (a dangling symlink counts as existing and
+  // fails to resolve) and require the real location to stay inside the real worktree.
+  let existing = abs
+  for (;;) {
+    try {
+      lstatSync(existing)
+      break
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw new ToolInputError(`cannot access path: ${p}`)
+      const parent = dirname(existing)
+      if (parent === existing) throw new ToolInputError(`path escapes the repository: ${p}`)
+      existing = parent
+    }
+  }
+  let realExisting: string
+  let realRoot: string
+  try {
+    realExisting = realpathSync(existing)
+    realRoot = realpathSync(worktree)
+  } catch {
+    throw new ToolInputError(`path escapes the repository: ${p}`)
+  }
+  const realRel = relative(realRoot, realExisting)
+  if (realRel.startsWith('..') || isAbsolute(realRel)) throw new ToolInputError(`path escapes the repository: ${p}`)
+  if (realRel.split(sep)[0] === '.git') throw new ToolInputError('the .git directory is not part of the workspace')
   return abs
 }
 
