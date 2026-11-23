@@ -107,11 +107,17 @@ export function createTextDriver(opts: TextOptions): Driver {
   const url = completionsUrl(opts.url)
   const headers = opts.bearer ? { authorization: `Bearer ${opts.bearer}` } : undefined
 
-  async function call(messages: Message[], timeoutMs: number): Promise<{ text: string; c: Completion }> {
-    const timeout = Math.max(30, Math.min(MAX_REQUEST_S, Math.floor(timeoutMs / 1000)))
+  /**
+   * `inSession`: the request is bound by a session deadline, so it gets no 30s floor and only a
+   * short transport grace; standalone requests (complete/probe) keep the floor and a 60s grace.
+   */
+  async function call(messages: Message[], timeoutMs: number, inSession = false): Promise<{ text: string; c: Completion }> {
+    const floorS = inSession ? 1 : 30
+    const graceS = inSession ? 5 : 60
+    const timeout = Math.max(floorS, Math.min(MAX_REQUEST_S, Math.floor(timeoutMs / 1000)))
     let res: { status: number; text: string }
     try {
-      res = await post(url, { model: opts.model || undefined, messages, timeout, ...NARROWING }, { headers, timeoutMs: (timeout + 60) * 1000 })
+      res = await post(url, { model: opts.model || undefined, messages, timeout, ...NARROWING }, { headers, timeoutMs: (timeout + graceS) * 1000 })
     } catch (err) {
       if ((err as Error).name === 'TimeoutError') throw new InferenceError('completion timed out', 'timeout')
       throw new InferenceError(`cannot reach ${url}: ${(err as Error).message}`, 'missing')
@@ -149,7 +155,7 @@ export function createTextDriver(opts: TextOptions): Driver {
       for (let round = 0; round < opts.maxRounds && !req.isDone(); round++) {
         const remaining = deadline - Date.now()
         if (remaining <= 0) throw new InferenceError(`session exceeded ${req.timeoutS}s`, 'timeout')
-        const { text, c } = await call(messages, remaining)
+        const { text, c } = await call(messages, remaining, true)
         usage.tokens_in! += c.usage?.prompt_tokens ?? 0
         usage.tokens_out! += c.usage?.completion_tokens ?? 0
         messages.push({ role: 'assistant', content: text })
