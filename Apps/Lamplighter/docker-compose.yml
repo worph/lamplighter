@@ -13,7 +13,7 @@ services:
   # shared network because it calls the box's Beacon (and through it the shared claude-code
   # container), and because that agent calls back into its workspace endpoint.
   lamplighter-backend:
-    image: ghcr.io/worph/lamplighter:0.6.0
+    image: ghcr.io/worph/lamplighter:0.6.1
     container_name: lamplighter-backend
     hostname: lamplighter-backend
     restart: unless-stopped
@@ -62,7 +62,7 @@ services:
     environment:
       TZ: $TZ
       BEACONIFY_NAME: lamplighter
-      BEACONIFY_DESCRIPTION: "Lamplighter — keeps a fleet of git repos maintained (docs, CVEs, deps, dead code, quality, patterns, architecture, security). Read repos, findings, rounds, proposals and the schedule; request rounds and fixes; dismiss findings; edit policy and check switches. Cannot approve, merge or push."
+      BEACONIFY_DESCRIPTION: "Lamplighter — keeps a fleet of git repos maintained (docs, CVEs, deps, dead code, quality, patterns, architecture, security). Read repos, findings, rounds, proposals and the schedule; request rounds and fixes; dismiss findings; reject undelivered proposals; edit policy and check switches. Cannot approve, merge or push."
       BEACONIFY_UPSTREAM_URL: http://lamplighter-backend:8080/mcp/admin
       BEACONIFY_AUTH: "Bearer ${LAMPLIGHTER_ADMIN_MCP_TOKEN}"
     depends_on:
@@ -139,7 +139,7 @@ x-compose-app:
       change:
         apply: env
   id: lamplighter
-  version: "0.6.0"
+  version: "0.6.1"
   routes:
     - { service: lamplighter, name: lamplighter, upstream-port: 80 }
   title:

@@ -70,9 +70,10 @@ These are the rules the design is built around. Code that breaks one is a bug ev
    input is a bug, not a judgement call.
 8. **Attention is a budget.** The scheduler may not open a PR, push a branch or raise an item past
    the attention caps, however much token budget is left.
-9. **MCP cannot decide.** The admin MCP reads, configures, requests and dismisses. It cannot
-   approve, merge, push or delete. Those are a person in Activity, or the chat with a typed
-   confirmation.
+9. **MCP cannot decide.** The admin MCP reads, configures, requests and dismisses, and may reject
+   a proposal that has not left Lamplighter (saying no changes no repository). It cannot approve,
+   merge, push or delete, and it never acts on a forge, so a delivered proposal is rejected only by
+   a person in Activity, or the chat with a typed confirmation.
 10. **Diagnosable with every port broken.** No forge, no inference, no network: the app still boots,
     serves its UI, and says what is wrong.
 
@@ -427,7 +428,7 @@ push, revert, delete branch), each requiring a typed confirmation.
 | `get_policy`, `set_policy(group|repo, prose)`, `get_check`, `set_check_settings` | configure, with restore points (Newsdesk's config history) |
 | `add_repo`, `discover_repos(forge, owner)`, `set_repo_group` | registry |
 
-No approve, merge, push, delete or revert (invariant 9). A read-only mode drops everything
+`reject_proposal(id, reason)` for an undelivered proposal. No approve, merge, push, delete or revert (invariant 9). A read-only mode drops everything
 below the first row.
 
 ---

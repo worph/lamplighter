@@ -15,7 +15,8 @@ import { deliver, getProposal, mergeBranch, rejectProposal, revertPush } from '.
 /**
  * One registry behind the admin MCP and the chat (Newsdesk/Aube's shape). Tools marked `chat`
  * exist only in the chat and only run after a typed confirmation: the MCP can read, configure,
- * request and dismiss, but it cannot approve, merge, push or revert anything (invariant 9).
+ * request, dismiss and reject what has not left Lamplighter, but it cannot approve, merge, push
+ * or revert anything, nor touch a forge (invariant 9).
  */
 
 export interface AdminTool<S extends z.ZodObject<z.ZodRawShape> = z.ZodObject<z.ZodRawShape>> {
@@ -234,11 +235,19 @@ export const ADMIN_TOOLS: AdminTool[] = [
     },
   }),
   tool({
-    name: 'reject_proposal', title: 'Reject a proposal', scope: 'chat',
-    description: 'Refuse a ready or delivered proposal (its branch is deleted). Decisive: needs typed confirmation.',
+    name: 'reject_proposal', title: 'Reject a proposal', scope: 'both',
+    description:
+      'Refuse a proposal with a reason. Its findings go back to open and are not proposed again until the code they are about changes. ' +
+      'Over MCP only a proposal that has not left Lamplighter (ready or held); a delivered one (an open PR or branch) is rejected in Activity, since that deletes its branch on the forge. ' +
+      'In the chat it needs typed confirmation.',
     schema: z.object({ id: z.string(), reason: z.string().min(3) }),
     confirm: ({ id }) => id,
     async run(app, { id, reason }, caller) {
+      // The MCP never acts on a forge (invariant 9): rejecting a delivered proposal deletes its branch there.
+      const state = getProposal(app.db, id)?.state
+      if (caller === 'mcp' && state === 'submitted') {
+        throw new Error(`proposal ${id} is delivered (an open PR or branch): reject it in Lamplighter's Activity page, where its branch on the forge is deleted too`)
+      }
       const p = await rejectProposal(app, id, reason, caller)
       return { id: p.id, state: p.state }
     },

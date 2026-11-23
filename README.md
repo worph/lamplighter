@@ -125,8 +125,9 @@ discloses the hole before the fix ships, so for any repo the forge reports as pu
 
 Lamplighter is administrable over MCP (announced to Beacon through a `beaconify` sidecar, as
 Touchstone and Newsdesk are): read the fleet, findings, rounds and the activity log; request a
-round; edit policy and check settings; dismiss a finding with a reason. **It cannot approve,
-merge, push or delete.** Those belong to a person in Activity, or to the chat with a typed
+round; edit policy and check settings; dismiss a finding with a reason; reject a proposal that has
+not been delivered. **It cannot approve, merge, push or delete**, nor reject a delivered one (that
+deletes its branch on the forge). Those belong to a person in Activity, or to the chat with a typed
 confirmation.
 
 ## What it is not

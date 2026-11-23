@@ -8,14 +8,15 @@ import { SETTING, getSetting } from '../settings.js'
 import { ADMIN_TOOLS, asText } from '../tools/admin.js'
 import { execTool, WORKSPACE_TOOLS } from '../tools/workspace.js'
 
-export const VERSION = '0.6.0'
+export const VERSION = '0.6.1'
 
 const ADMIN_INSTRUCTIONS = `Lamplighter keeps a fleet of git repositories maintained: it runs checks (docs, cve, deps,
 dead-code, refactor, quality, patterns, architecture, security) as rounds, records findings, and prepares
 validated fixes that a person approves in Lamplighter's Activity page.
 
-This surface reads the fleet, configures it, requests rounds or fixes, and dismisses findings with a
-reason. It cannot approve, merge, push or revert anything — those decisions belong to a person in the
+This surface reads the fleet, configures it, requests rounds or fixes, dismisses findings with a
+reason, and rejects proposals that have not been delivered yet. It cannot approve, merge, push or
+revert anything, nor reject a delivered proposal — those decisions belong to a person in the
 Activity page or the administrator chat. request_round and request_fix return at once; the work runs
 when a slot is free (see get_schedule).`
 

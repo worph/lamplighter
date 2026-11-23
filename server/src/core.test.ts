@@ -232,6 +232,63 @@ describe('reconcile', () => {
   })
 })
 
+describe('admin MCP', () => {
+  it('may reject an undelivered proposal, never a delivered one, and still cannot approve', async () => {
+    const { ADMIN_TOOLS, adminTool } = await import('./tools/admin.js')
+    const mcp = ADMIN_TOOLS.filter((t) => t.scope === 'both').map((t) => t.name)
+    expect(mcp).toContain('reject_proposal')
+    for (const decisive of ['approve_proposal', 'merge_branch', 'revert_push']) expect(mcp).not.toContain(decisive)
+    const db = openDb(join(tmp(), 'db.sqlite'))
+    db.prepare("INSERT INTO forges (id, kind, name, created_at) VALUES ('f','git','f','now')").run()
+    db.prepare("INSERT OR IGNORE INTO groups (id, name, policy) VALUES ('default','Default','')").run()
+    db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, created_at) VALUES ('f~r','f','default','','r','x','main','now')").run()
+    db.prepare("INSERT INTO findings (id, repo_key, check_kind, fingerprint, category, anchor, title, body, severity, state, input_hash, first_round, last_round, created_at, updated_at) VALUES ('f1','f~r','patterns','fp','c','a.ts','t','','minor','proposed','h','r0','r0','now','now')").run()
+    const proposal = (id: string, state: string) =>
+      db.prepare("INSERT INTO proposals (id, repo_key, check_kind, branch, base_sha, head_sha, state, delivery, finding_ids, created_at, updated_at) VALUES (?, 'f~r', 'patterns', 'lamplighter/patterns/x', 'b', 'h', ?, 'push', '[\"f1\"]', 'now', 'now')").run(id, state)
+    proposal('p_ready', 'ready')
+    proposal('p_sent', 'submitted')
+    db.prepare("UPDATE findings SET proposal_id = 'p_ready' WHERE id = 'f1'").run()
+    const app = { db, config: { current: configSchema.parse({}) } } as unknown as import('./context.js').App
+    const reject = adminTool('reject_proposal')!
+    await expect(reject.run(app, { id: 'p_sent', reason: 'not this one' } as never, 'mcp')).rejects.toThrow(/Activity/)
+    expect((db.prepare("SELECT state FROM proposals WHERE id = 'p_sent'").get() as { state: string }).state).toBe('submitted')
+    expect(await reject.run(app, { id: 'p_ready', reason: 'a broader fix is coming' } as never, 'mcp')).toEqual({ id: 'p_ready', state: 'rejected' })
+    // Its finding goes back to open, blocked until its input changes.
+    expect(db.prepare("SELECT state, blocked_input FROM findings WHERE id = 'f1'").get()).toEqual({ state: 'open', blocked_input: 'h' })
+  })
+})
+
+describe('mirrors', () => {
+  it('let rounds of one repo fetch and check out at the same moment', async () => {
+    const { Mirrors } = await import('./repos/mirror.js')
+    const origin = tmp()
+    sh(origin, 'init', '-q', '-b', 'main')
+    writeFileSync(join(origin, 'README.md'), 'v1\n')
+    sh(origin, 'add', '-A'); sh(origin, 'commit', '-qm', 'one')
+    const head = sh(origin, 'rev-parse', 'HEAD')
+    const data = tmp()
+    const db = openDb(join(data, 'db.sqlite'))
+    db.prepare("INSERT INTO forges (id, kind, name, created_at) VALUES ('f','git','f','now')").run()
+    db.prepare("INSERT OR IGNORE INTO groups (id, name, policy) VALUES ('default','Default','')").run()
+    db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, created_at) VALUES ('f~r','f','default','','r',?,'main','now')").run(origin)
+    const repo = db.prepare("SELECT * FROM repos WHERE key = 'f~r'").get() as import('./repos/registry.js').RepoRow
+    const m = new Mirrors(db, data)
+    await m.fetch(repo) // the mirror exists, so the next fetches all take the set-url path
+    // Checks start together, as a "run every check" does: each fetches, then checks out.
+    const runs = await Promise.all(Array.from({ length: 4 }, async (_, i) => {
+      const sha = await m.fetch(repo)
+      const wt = await m.addWorktree(repo, `s${i}`, sha)
+      const seen = readFileSync(join(wt, 'README.md'), 'utf8')
+      await m.removeWorktree(repo, wt)
+      return { sha, seen }
+    }))
+    expect(runs.every((r) => r.sha === head && r.seen === 'v1\n')).toBe(true)
+    // A failure on one operation does not wedge the ones queued behind it.
+    await expect(m.addWorktree(repo, 'bad', 'not-a-sha')).rejects.toThrow()
+    expect(await m.fetch(repo)).toBe(head)
+  }, 120_000)
+})
+
 describe('forge REST clients', () => {
   const row = (kind: 'github' | 'gitea', base: string | null): ForgeRow => ({ id: kind, kind, name: kind, base_url: base, webhook_secret: null, created_at: '' })
   const cred: CredentialRow = { id: 'c', forge_id: 'f', label: 'c', username: 'u', token: 't', token_set_at: null, auth_json: null, commit_name: null, commit_email: null, is_default: 1, created_at: '' }
