@@ -43,6 +43,7 @@ export default function Repos() {
                       <Link to={`/repos/${encodeURIComponent(r.key)}`} className="font-medium hover:underline">{r.owner ? `${r.owner}/` : ''}{r.name}</Link>
                       <div className="flex gap-1 mt-0.5">
                         <Badge>{r.forge_id}</Badge>
+                        {r.credential && <span title={`pushes as ${r.credential.label}${r.credential.login ? ` (${r.credential.login})` : ''}`}><Badge tone={r.credential.via === 'repo' || r.credential.via === 'group' ? 'violet' : 'stone'}>as {r.credential.label}</Badge></span>}
                         <Badge tone={r.visibility === 'public' ? 'blue' : 'stone'}>{r.visibility}</Badge>
                         {r.group_id !== 'default' && <Badge tone="violet">{r.group_id}</Badge>}
                         {!r.write.ok && <span title={r.write.why}><Badge tone="amber">read-only: fixing blocked</Badge></span>}

@@ -1,4 +1,4 @@
-import type { ForgeApi, ForgeHealth, ForgeRow, PrRef, RemoteRepo } from './types.js'
+import type { CredentialRow, ForgeApi, ForgeHealth, ForgeRow, PrRef, RemoteRepo } from './types.js'
 import { basicAuthHeader, jsonRequest } from './http.js'
 
 interface GhRepo {
@@ -18,14 +18,14 @@ export class GitHubForge implements ForgeApi {
   readonly kind = 'github' as const
   private readonly api: string
 
-  constructor(private readonly row: ForgeRow, private readonly fetchImpl: typeof fetch = fetch) {
+  constructor(private readonly row: ForgeRow, private readonly cred: CredentialRow | null = null, private readonly fetchImpl: typeof fetch = fetch) {
     this.api = (row.base_url || 'https://api.github.com').replace(/\/$/, '')
   }
 
   private headers(): Record<string, string> {
     return {
       'x-github-api-version': '2022-11-28',
-      ...(this.row.token ? { authorization: `Bearer ${this.row.token}` } : {}),
+      ...(this.cred?.token ? { authorization: `Bearer ${this.cred.token}` } : {}),
     }
   }
 
@@ -34,7 +34,7 @@ export class GitHubForge implements ForgeApi {
   }
 
   async probe(): Promise<ForgeHealth> {
-    if (!this.row.token) return { ok: true, detail: 'anonymous: reads public repos, cannot push' }
+    if (!this.cred?.token) return { ok: true, detail: 'anonymous: reads public repos, cannot push' }
     try {
       const me = await this.req<{ login: string }>('/user')
       return { ok: true, detail: `authenticated as ${me.login}` }
@@ -73,7 +73,7 @@ export class GitHubForge implements ForgeApi {
   }
 
   gitAuth(): Record<string, string> {
-    return this.row.token ? basicAuthHeader(this.row.username || 'x-access-token', this.row.token) : {}
+    return this.cred?.token ? basicAuthHeader(this.cred.username || 'x-access-token', this.cred.token) : {}
   }
 
   cloneUrl(owner: string, name: string): string {

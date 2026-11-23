@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Db } from '../db/index.js'
 import { now } from '../db/index.js'
-import { forgeApi, forgeRow } from '../forges/index.js'
+import { apiFor } from '../forges/auth.js'
 import { git } from '../forges/gitcli.js'
 import { TRAILER_ROUND } from '../forges/refs.js'
 import type { RepoRow } from './registry.js'
@@ -23,7 +23,7 @@ export class Mirrors {
   }
 
   auth(repo: RepoRow): Record<string, string> {
-    return forgeApi(forgeRow(this.db, repo.forge_id)).gitAuth()
+    return apiFor(this.db, repo).gitAuth()
   }
 
   async ensure(repo: RepoRow): Promise<string> {

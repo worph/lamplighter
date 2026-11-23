@@ -27,7 +27,7 @@ The family's habit is to be careful with words and rename before building, not a
 
 | Term | Meaning |
 |---|---|
-| **forge** | where a repo lives and how to talk to it: `github`, `gitea`, `git` (a bare remote URL, SSH or HTTPS). One configured forge = one host + one credential. |
+| **forge** | where a repo lives and how to talk to it: `github`, `gitea`, `git` (a bare remote URL, SSH or HTTPS). One configured forge = one host, holding one **credential** per account Lamplighter speaks as there (you, an org's token, a bot). |
 | **repo** | one monitored repository on one forge, with a tracked **line** (the branch Lamplighter keeps well: usually the default branch). Identity: `<forge>~<owner>/<name>`, e.g. `github~worph/Touchstone`. `~` for the same reason as Touchstone: it survives `encodeURIComponent`. |
 | **group** | a set of repos that share policy and defaults: typically an org (`yundera`, `nsl`, `worph`). A repo belongs to exactly one group. Settings inherit **default → group → repo**. |
 | **check** | one kind of upkeep: `docs`, `cve`, `deps`, `dead-code`, `refactor`, `quality`, `patterns`, `architecture`, `security`. Each is a file, `data/checks/<kind>.md` (§5). |
@@ -102,8 +102,9 @@ inference backend  (external, shared: claude-code via Beacon, or any OpenAI-comp
 ```
 
 The backend holds **forge credentials**, unlike Newsdesk, which holds none. It has to, because
-pushing and opening PRs are the product. They are fine-grained, per forge, scoped to the repos
-in the registry, and never handed to the model (invariant 1).
+pushing and opening PRs are the product. They are fine-grained, one per account or owner on a forge,
+scoped to the repos in the registry, each repo using the one pinned on it or its group or else the
+one that may push there, and never handed to the model (invariant 1).
 
 ---
 

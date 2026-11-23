@@ -1,5 +1,4 @@
 import type { ForgeApi, ForgeHealth, ForgeRow, RemoteRepo } from './types.js'
-import { basicAuthHeader } from './http.js'
 
 /**
  * A bare git remote: SSH, HTTPS or a local path. There is no REST side — no visibility to read
@@ -15,8 +14,9 @@ export class PlainGitForge implements ForgeApi {
     return { ok: true, detail: this.row.base_url ? `remotes under ${this.row.base_url}` : 'remotes given per repo' }
   }
 
+  /** The container's SSH key, or the remote's own credentials: nothing Lamplighter holds. */
   gitAuth(): Record<string, string> {
-    return this.row.token ? basicAuthHeader(this.row.username || 'git', this.row.token) : {}
+    return {}
   }
 
   cloneUrl(owner: string, name: string): string {

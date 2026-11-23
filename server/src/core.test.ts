@@ -15,7 +15,7 @@ import { configSchema } from './config/index.js'
 import { openDb } from './db/index.js'
 import { GiteaForge } from './forges/gitea.js'
 import { GitHubForge } from './forges/github.js'
-import type { ForgeRow } from './forges/types.js'
+import type { CredentialRow, ForgeRow } from './forges/types.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'll-'))
 const sh = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@x', ...args], { cwd, encoding: 'utf8' }).trim()
@@ -188,7 +188,8 @@ describe('reconcile', () => {
 })
 
 describe('forge REST clients', () => {
-  const row = (kind: 'github' | 'gitea', base: string | null): ForgeRow => ({ id: kind, kind, name: kind, base_url: base, username: 'u', token: 't', webhook_secret: null, created_at: '' })
+  const row = (kind: 'github' | 'gitea', base: string | null): ForgeRow => ({ id: kind, kind, name: kind, base_url: base, webhook_secret: null, created_at: '' })
+  const cred: CredentialRow = { id: 'c', forge_id: 'f', label: 'c', username: 'u', token: 't', token_set_at: null, auth_json: null, commit_name: null, commit_email: null, is_default: 1, created_at: '' }
   it('Gitea opens a labelled PR', async () => {
     const seen: string[] = []
     const fetchImpl = (async (url: string, init: RequestInit) => {
@@ -199,7 +200,7 @@ describe('forge REST clients', () => {
       if (p.endsWith('/pulls')) expect(JSON.parse(init.body as string).labels).toEqual([7])
       return new Response(JSON.stringify(body), { status: 200 })
     }) as unknown as typeof fetch
-    const pr = await new GiteaForge(row('gitea', 'http://g'), fetchImpl).openPr('o', 'r', { head: 'lamplighter/x/y', base: 'main', title: 't', body: 'b' })
+    const pr = await new GiteaForge(row('gitea', 'http://g'), cred, fetchImpl).openPr('o', 'r', { head: 'lamplighter/x/y', base: 'main', title: 't', body: 'b' })
     expect(pr).toEqual({ number: 3, url: 'http://g/pr/3' })
     expect(seen).toEqual(['GET /api/v1/repos/o/r/labels', 'POST /api/v1/repos/o/r/labels', 'POST /api/v1/repos/o/r/pulls'])
   })
@@ -209,33 +210,44 @@ describe('forge REST clients', () => {
       const body = p.endsWith('/pulls/9') ? { state: 'closed', merged: true } : { name: 'r', owner: { login: 'o' }, default_branch: 'dev', private: false, clone_url: 'x' }
       return new Response(JSON.stringify(body), { status: 200 })
     }) as unknown as typeof fetch
-    const gh = new GitHubForge(row('github', null), fetchImpl)
+    const gh = new GitHubForge(row('github', null), cred, fetchImpl)
     expect(await gh.repoInfo('o', 'r')).toMatchObject({ defaultBranch: 'dev', visibility: 'public' })
     expect(await gh.prState('o', 'r', 9)).toBe('merged')
     expect(gh.gitAuth()['http.extraHeader']).toMatch(/^Authorization: Basic /)
   })
 })
 
-describe('forge tokens and write access', () => {
+describe('forge credentials and write access', () => {
   const setup = () => {
     const db = openDb(join(tmp(), 'db.sqlite'))
     db.prepare("INSERT INTO forges (id, kind, name, created_at) VALUES ('github','github','GitHub','now')").run()
     db.prepare("INSERT OR IGNORE INTO groups (id, name, policy) VALUES ('default','Default','')").run()
-    db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, visibility, created_at) VALUES ('github~o/r','github','default','o','r','https://github.com/o/r.git','main','public','now')").run()
+    const addRepo = (owner: string, name: string) =>
+      db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, visibility, created_at) VALUES (?, 'github', 'default', ?, ?, 'x', 'main', 'public', 'now')").run(`github~${owner}/${name}`, owner, name)
+    addRepo('o', 'r')
     const app = { db, config: { current: configSchema.parse({}) } } as unknown as import('./context.js').App
-    const repo = { forge_id: 'github', owner: 'o', name: 'r' }
-    return { db, app, repo }
+    const repoRow = (key = 'github~o/r') => db.prepare('SELECT * FROM repos WHERE key = ?').get(key) as { forge_id: string; owner: string; name: string; group_id: string; credential_id: string | null }
+    return { db, app, addRepo, repoRow }
   }
-  /** GitHub as seen by a token whose account may (or may not) push, and whose grant does (or does not) include Contents. */
-  const fakeGitHub = (accountPush: boolean, contents: boolean) =>
+  /**
+   * GitHub as seen by each token: `who` maps a token to its account and, per `owner/name`, whether
+   * the account may push and whether the token was given Contents. Anything else is a 404.
+   */
+  const fakeGitHub = (who: Record<string, { login: string; id: number; repos: Record<string, [accountPush: boolean, contents: boolean]> }>) =>
     (async (url: string, init?: RequestInit) => {
       const path = new URL(url).pathname
       const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
-      if (path === '/user') return json(200, { login: 'bot', id: 42 })
-      if (path === '/repos/o/r') return json(200, { permissions: { push: accountPush } })
-      if (path === '/repos/o/r/git/blobs' && init?.method === 'POST') return contents ? json(422, { message: 'Invalid request' }) : json(403, { message: 'Resource not accessible by personal access token' })
-      return json(404, { message: 'Not Found' })
+      const token = ((init?.headers as Record<string, string> | undefined)?.authorization ?? '').replace(/^Bearer /, '')
+      const me = who[token]
+      if (!me) return json(401, { message: 'Bad credentials' })
+      if (path === '/user') return json(200, { login: me.login, id: me.id })
+      const m = /^\/repos\/([^/]+\/[^/]+)(\/git\/blobs)?$/.exec(path)
+      const grant = m ? me.repos[m[1]!] : undefined
+      if (!grant) return json(404, { message: 'Not Found' })
+      if (!m![2]) return json(200, { permissions: { push: grant[0] } })
+      return grant[1] ? json(422, { message: 'Invalid request' }) : json(403, { message: 'Resource not accessible by personal access token' })
     }) as typeof fetch
+  const openAlerts = (db: ReturnType<typeof setup>['db']) => (db.prepare("SELECT COUNT(*) AS n FROM activity WHERE kind = 'alert' AND state = 'open'").get() as { n: number }).n
 
   it('normalizes a pasted token and refuses what is not one', async () => {
     const { normalizeToken } = await import('./forges/auth.js')
@@ -245,39 +257,91 @@ describe('forge tokens and write access', () => {
   })
 
   it('blocks fixing without a token, and until the token may push to the repo', async () => {
-    const { setForgeToken, writeAccess, deliveryBlocker, commitIdentity } = await import('./forges/auth.js')
+    const { addCredential, setCredentialToken, writeAccess, deliveryBlocker, commitIdentity, forgeView } = await import('./forges/auth.js')
     const { forgeRow } = await import('./forges/index.js')
-    const { db, app, repo } = setup()
-    expect(writeAccess(app, repo)).toMatchObject({ ok: false, why: expect.stringMatching(/no token/) })
+    const { db, app, repoRow } = setup()
+    expect(writeAccess(app, repoRow())).toMatchObject({ ok: false, why: expect.stringMatching(/no credential/) })
+    const bot = addCredential(app, 'github', { label: 'Bot' })
+    expect(bot.is_default).toBe(1) // the forge's first credential is its default
+    expect(writeAccess(app, repoRow())).toMatchObject({ ok: false, why: expect.stringMatching(/no token/) })
 
     const real = globalThis.fetch
     try {
-      globalThis.fetch = fakeGitHub(true, false)
-      const failing = await setForgeToken(app, 'github', 'github_pat_x', 'test')
-      expect(failing.state).toBe('failing')
-      expect(writeAccess(app, repo)).toMatchObject({ ok: false, why: expect.stringMatching(/Contents/) })
-      expect(deliveryBlocker(forgeRow(db, 'github'), 'o/r')).toMatch(/Contents/)
-      // One alert per forge, opened by the failing check and closed by the working one.
-      const openAlerts = () => (db.prepare("SELECT COUNT(*) AS n FROM activity WHERE kind = 'alert' AND state = 'open'").get() as { n: number }).n
-      expect(openAlerts()).toBe(1)
+      globalThis.fetch = fakeGitHub({ pat_x: { login: 'bot', id: 42, repos: { 'o/r': [true, false] } } })
+      const failing = await setCredentialToken(app, bot.id, 'pat_x', 'test')
+      expect(failing.state).toBe('ok') // the token works; it just cannot write here
+      expect(writeAccess(app, repoRow())).toMatchObject({ ok: false, why: expect.stringMatching(/Contents/) })
+      expect(deliveryBlocker(app, repoRow())).toMatch(/Contents/)
+      expect(openAlerts(db)).toBe(1) // one alert per forge
 
-      globalThis.fetch = fakeGitHub(true, true)
-      const ok = await setForgeToken(app, 'github', 'github_pat_y', 'test')
-      expect(ok).toMatchObject({ state: 'ok', login: 'bot', user_id: 42 })
-      expect(writeAccess(app, repo).ok).toBe(true)
-      expect(deliveryBlocker(forgeRow(db, 'github'), 'o/r')).toBeUndefined()
-      expect(openAlerts()).toBe(0)
+      globalThis.fetch = fakeGitHub({ pat_y: { login: 'bot', id: 42, repos: { 'o/r': [true, true] } } })
+      await setCredentialToken(app, bot.id, 'pat_y', 'test')
+      expect(writeAccess(app, repoRow()).ok).toBe(true)
+      expect(deliveryBlocker(app, repoRow())).toBeUndefined()
+      expect(openAlerts(db)).toBe(0)
       // The default identity gives way to the token account's noreply address.
-      expect(commitIdentity(app, 'github')).toEqual({ name: 'Lamplighter', email: '42+bot@users.noreply.github.com' })
+      expect(commitIdentity(app, repoRow())).toEqual({ name: 'Lamplighter', email: '42+bot@users.noreply.github.com' })
 
-      globalThis.fetch = fakeGitHub(false, true)
-      await setForgeToken(app, 'github', 'github_pat_z', 'test')
-      expect(writeAccess(app, repo)).toMatchObject({ ok: false, why: expect.stringMatching(/account cannot push/) })
+      globalThis.fetch = fakeGitHub({ pat_z: { login: 'bot', id: 42, repos: { 'o/r': [false, true] } } })
+      await setCredentialToken(app, bot.id, 'pat_z', 'test')
+      expect(writeAccess(app, repoRow())).toMatchObject({ ok: false, why: expect.stringMatching(/account cannot push/) })
+
+      globalThis.fetch = fakeGitHub({})
+      const refused = await setCredentialToken(app, bot.id, 'pat_gone', 'test')
+      expect(refused).toMatchObject({ state: 'failing', problems: [expect.stringMatching(/refused the token/)] })
     } finally {
       globalThis.fetch = real
     }
-    // The token never leaves the server: the view the Settings page gets has no token field.
-    const { forgeView } = await import('./forges/auth.js')
-    expect(JSON.stringify(forgeView(forgeRow(db, 'github')))).not.toContain('github_pat')
+    // Tokens never leave the server: the view the Settings page gets has no token in it.
+    expect(JSON.stringify(forgeView(db, forgeRow(db, 'github')))).not.toMatch(/pat_/)
+  })
+
+  it('gives each repo the credential that may push there, unless one is pinned', async () => {
+    const { addCredential, setCredentialToken, credentialFor, writeAccess, commitIdentity, patchCredential } = await import('./forges/auth.js')
+    const { db, app, addRepo, repoRow } = setup()
+    addRepo('acme', 'site')
+    const me = addCredential(app, 'github', { label: 'Me' })
+    const org = addCredential(app, 'github', { label: 'Acme org', commit_name: 'Acme Bot', commit_email: 'bot@acme.example' })
+    const real = globalThis.fetch
+    try {
+      // One fine-grained token per resource owner: neither reaches the other's repos.
+      globalThis.fetch = fakeGitHub({
+        pat_me: { login: 'me', id: 1, repos: { 'o/r': [true, true] } },
+        pat_org: { login: 'me', id: 1, repos: { 'acme/site': [true, true] } },
+      })
+      await setCredentialToken(app, me.id, 'pat_me', 'test')
+      await setCredentialToken(app, org.id, 'pat_org', 'test')
+      const mine = repoRow('github~o/r')
+      const theirs = repoRow('github~acme/site')
+      expect(credentialFor(db, mine)).toMatchObject({ cred: { id: me.id }, via: 'auto' })
+      expect(credentialFor(db, theirs)).toMatchObject({ cred: { id: org.id }, via: 'auto' })
+      expect(writeAccess(app, mine).ok && writeAccess(app, theirs).ok).toBe(true)
+      expect(openAlerts(db)).toBe(0) // a token that cannot reach the other owner is not a fault
+      // Each credential signs its own commits; one without a name of its own uses the global one.
+      expect(commitIdentity(app, theirs)).toEqual({ name: 'Acme Bot', email: 'bot@acme.example' })
+      expect(commitIdentity(app, mine)).toEqual({ name: 'Lamplighter', email: '1+me@users.noreply.github.com' })
+
+      // A pin wins over auto, even when it cannot push — and says so.
+      db.prepare('UPDATE repos SET credential_id = ? WHERE key = ?').run(me.id, 'github~acme/site')
+      expect(credentialFor(db, repoRow('github~acme/site'))).toMatchObject({ cred: { id: me.id }, via: 'repo' })
+      expect(writeAccess(app, repoRow('github~acme/site'))).toMatchObject({ ok: false, why: expect.stringMatching(/pinned on the repository/) })
+      // A group pin applies below the repo's own.
+      db.prepare('UPDATE repos SET credential_id = NULL').run()
+      db.prepare("UPDATE groups SET credential_id = ? WHERE id = 'default'").run(org.id)
+      expect(credentialFor(db, repoRow('github~o/r'))).toMatchObject({ cred: { id: org.id }, via: 'group' })
+      db.prepare("UPDATE groups SET credential_id = NULL WHERE id = 'default'").run()
+
+      // A repo nobody can push to names what every credential answered.
+      addRepo('elsewhere', 'x')
+      await setCredentialToken(app, me.id, 'pat_me', 'test')
+      expect(writeAccess(app, repoRow('github~elsewhere/x'))).toMatchObject({ ok: false, why: expect.stringMatching(/no GitHub credential may push.*Me.*Acme org/) })
+      expect(openAlerts(db)).toBe(1)
+      // Making another credential the default moves the fallback, not the auto choices.
+      patchCredential(app, org.id, { is_default: true })
+      expect(credentialFor(db, repoRow('github~elsewhere/x'))).toMatchObject({ cred: { id: org.id }, via: 'default' })
+      expect(credentialFor(db, repoRow('github~o/r'))).toMatchObject({ cred: { id: me.id }, via: 'auto' })
+    } finally {
+      globalThis.fetch = real
+    }
   })
 })

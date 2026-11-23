@@ -5,8 +5,11 @@ import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { listEvents, logEvent } from '../events.js'
 import { dismiss, lastDismissal, listFindings, reopen } from '../findings/index.js'
-import { forgeApi, forgeRow, listForges } from '../forges/index.js'
-import { checkForge, forgeView, normalizeToken, setForgeToken, writeAccess } from '../forges/auth.js'
+import { credentialRow, forgeApi, forgeRow, listCredentials, listForges } from '../forges/index.js'
+import {
+  addCredential, asAnyCredential, assertPinnable, checkCredential, checkForge, credentialFor, credentialView, forgeAlert, forgeView,
+  normalizeToken, patchCredential, removeCredential, setCredentialToken, writeAccess,
+} from '../forges/auth.js'
 import { driverFor } from '../inference/index.js'
 import { getItem, listItems, resolveItem } from '../activity/index.js'
 import { addRepo, getRepo, listGroups, listRepos, parseSettings, getGroup } from '../repos/registry.js'
@@ -41,9 +44,22 @@ const forgeInput = z.object({
   kind: z.enum(['github', 'gitea', 'git']),
   name: z.string().min(1),
   base_url: z.string().optional().nullable(),
-  username: z.string().optional().nullable(),
   webhook_secret: z.string().optional().nullable(),
 })
+
+const credentialInput = z.object({
+  label: z.string().min(1).max(60),
+  username: z.string().optional().nullable(),
+  commit_name: z.string().optional().nullable(),
+  commit_email: z.string().email().or(z.literal('')).optional().nullable(),
+  is_default: z.boolean().optional(),
+})
+
+/** Which credential the repo uses and why — never the token. */
+function credentialOf(app: App, r: Parameters<typeof credentialFor>[1]) {
+  const { cred, via } = credentialFor(app.db, r)
+  return cred ? { id: cred.id, label: cred.label, via, login: credentialView(cred).auth.login } : null
+}
 
 export function registerApi(f: FastifyInstance, app: App): void {
   f.setErrorHandler((error, _req, reply) => {
@@ -74,6 +90,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
     listRepos(app.db).map((r) => ({
       key: r.key, forge_id: r.forge_id, group_id: r.group_id, owner: r.owner, name: r.name, line: r.line, visibility: r.visibility,
       last_head: r.last_head, last_fetch_at: r.last_fetch_at, fetch_error: r.fetch_error, lamps: lamps(app, r.key), write: writeAccess(app, r),
+      credential_id: r.credential_id, credential: credentialOf(app, r),
     })),
   )
 
@@ -84,7 +101,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
     const r = await addRepo(app.db, { ...body, owner: body.owner || undefined, remote_url: body.remote_url || undefined, line: body.line || undefined })
     logEvent(app.db, { code: 'REPO_ADDED', repo: r.key, message: 'added from the UI' })
     void app.pollNow(r.key)
-    void checkForge(app, r.forge_id).catch(() => undefined) // a new repo is a new "may it push here?"
+    void checkForge(app, r.forge_id).catch(() => undefined) // a new repo is a new "may it push here?" for every credential
     return r
   })
 
@@ -98,6 +115,8 @@ export function registerApi(f: FastifyInstance, app: App): void {
       group,
       lamps: lamps(app, key),
       write: writeAccess(app, r),
+      credential: credentialOf(app, r),
+      credentials: listCredentialsView(app, r.forge_id),
       checks: app.checks.list().map((def) => ({ kind: def.kind, title: def.title, scopes: def.scopes, agent: def.agent, settings: settingsFor(app, r, def) })),
       findings: listFindings(app.db, { repo: key, limit: 500 }).map((x) => ({ ...x, dismissal: x.state === 'dismissed' ? lastDismissal(app.db, x.id) : undefined })),
       rounds: app.db.prepare('SELECT id, check_kind, kind, scope, status, summary, error, trigger, base_sha, head_sha, proposal_id, started_at, ended_at FROM rounds WHERE repo_key = ? ORDER BY started_at DESC LIMIT 60').all(key),
@@ -109,9 +128,17 @@ export function registerApi(f: FastifyInstance, app: App): void {
   f.patch('/api/v1/repos/:key', async (req) => {
     const key = (req.params as { key: string }).key
     getRepo(app.db, key)
-    const body = z.object({ policy: z.string().optional(), group_id: z.string().optional(), visibility: z.enum(['public', 'private']).optional(), line: z.string().optional() }).parse(req.body)
+    const r = getRepo(app.db, key)
+    const body = z
+      .object({ policy: z.string().optional(), group_id: z.string().optional(), visibility: z.enum(['public', 'private']).optional(), line: z.string().optional(), credential_id: z.string().nullable().optional() })
+      .parse(req.body)
     if (body.group_id) getGroup(app.db, body.group_id)
+    if (body.credential_id !== undefined) assertPinnable(app.db, body.credential_id, r.forge_id)
     for (const [col, v] of Object.entries(body)) if (v !== undefined) app.db.prepare(`UPDATE repos SET ${col} = ? WHERE key = ?`).run(v, key)
+    if (body.credential_id !== undefined || body.group_id) {
+      logEvent(app.db, { level: 'warn', code: 'REPO_CREDENTIAL', repo: key, message: `credential: ${credentialOf(app, getRepo(app.db, key))?.label ?? 'none'} (${body.credential_id === undefined ? 'group changed' : body.credential_id ? 'pinned' : 'unpinned'} by operator)` })
+      forgeAlert(app, r.forge_id)
+    }
     return getRepo(app.db, key)
   })
 
@@ -207,7 +234,10 @@ export function registerApi(f: FastifyInstance, app: App): void {
       config: cfg,
       inference_bearer: masked(getSetting(app.db, SETTING.inferenceBearer)),
       admin_mcp_token: masked(getSetting(app.db, SETTING.adminMcpToken)),
-      forges: listForges(app.db).map((x) => ({ ...forgeView(x), repos: listRepos(app.db).filter((r) => r.forge_id === x.id).map((r) => (r.owner ? `${r.owner}/${r.name}` : r.name)) })),
+      forges: listForges(app.db).map((x) => ({
+        ...forgeView(app.db, x),
+        repos: listRepos(app.db).filter((r) => r.forge_id === x.id).map((r) => ({ repo: r.owner ? `${r.owner}/${r.name}` : r.name, key: r.key, credential: credentialOf(app, r), write: writeAccess(app, r) })),
+      })),
       groups: listGroups(app.db),
       checks: app.checks.list().map((c) => ({ kind: c.kind, title: c.title, revision: c.revision, scopes: c.scopes, agent: c.agent, sensitive: c.sensitive, defaults: c.defaults, settings: { ...c.defaults, ...(cfg.checks[c.kind] ?? {}) } })),
       check_errors: app.checks.errors,
@@ -253,8 +283,8 @@ export function registerApi(f: FastifyInstance, app: App): void {
     const b = forgeInput.parse(req.body)
     if (b.kind === 'gitea' && !b.base_url) throw new Error('a Gitea forge needs its base URL')
     app.db
-      .prepare('INSERT INTO forges (id, kind, name, base_url, username, webhook_secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(b.id, b.kind, b.name, b.base_url || null, b.username || null, b.webhook_secret || null, now())
+      .prepare('INSERT INTO forges (id, kind, name, base_url, webhook_secret, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(b.id, b.kind, b.name, b.base_url || null, b.webhook_secret || null, now())
     return { id: b.id }
   })
   f.patch('/api/v1/forges/:id', async (req) => {
@@ -271,20 +301,49 @@ export function registerApi(f: FastifyInstance, app: App): void {
     app.db.prepare('DELETE FROM forges WHERE id = ?').run(id)
     return { ok: true }
   })
-  f.post('/api/v1/forges/:id/probe', async (req) => forgeApi(forgeRow(app.db, (req.params as { id: string }).id)).probe())
-  // The token, Touchstone's way: write-only (nothing returns it), checked in the same response,
-  // and only here — no chat or admin-MCP tool can choose whose name Lamplighter pushes under.
-  f.post('/api/v1/forges/:id/auth/check', async (req) => checkForge(app, (req.params as { id: string }).id))
-  f.put('/api/v1/forges/:id/token', async (req) => {
+  f.post('/api/v1/forges/:id/probe', async (req) => {
     const id = (req.params as { id: string }).id
-    return setForgeToken(app, id, normalizeToken((req.body as { token?: unknown } | undefined)?.token), 'operator')
+    return forgeApi(forgeRow(app.db, id), listCredentials(app.db, id).find((c) => c.token) ?? null).probe()
   })
-  f.delete('/api/v1/forges/:id/token', async (req) => setForgeToken(app, (req.params as { id: string }).id, null, 'operator'))
+  f.post('/api/v1/forges/:id/auth/check', async (req) => {
+    const id = (req.params as { id: string }).id
+    await checkForge(app, id)
+    return forgeView(app.db, forgeRow(app.db, id))
+  })
+  // Credentials, Touchstone's way: tokens are write-only (nothing returns them), checked in the
+  // same response, and set — like every pin — only here: no chat or admin-MCP tool can choose
+  // whose name Lamplighter pushes under.
+  f.post('/api/v1/forges/:id/credentials', async (req) => {
+    const id = (req.params as { id: string }).id
+    return credentialView(addCredential(app, id, credentialInput.parse(req.body)))
+  })
+  f.patch('/api/v1/credentials/:id', async (req) => {
+    const id = (req.params as { id: string }).id
+    const cred = patchCredential(app, id, credentialInput.partial().parse(req.body))
+    forgeAlert(app, cred.forge_id)
+    return credentialView(cred)
+  })
+  f.delete('/api/v1/credentials/:id', async (req) => {
+    removeCredential(app, (req.params as { id: string }).id, 'operator')
+    return { ok: true }
+  })
+  f.post('/api/v1/credentials/:id/check', async (req) => {
+    const id = (req.params as { id: string }).id
+    const auth = await checkCredential(app, id)
+    forgeAlert(app, credentialRow(app.db, id).forge_id)
+    return auth
+  })
+  f.put('/api/v1/credentials/:id/token', async (req) => {
+    const id = (req.params as { id: string }).id
+    return setCredentialToken(app, id, normalizeToken((req.body as { token?: unknown } | undefined)?.token), 'operator')
+  })
+  f.delete('/api/v1/credentials/:id/token', async (req) => setCredentialToken(app, (req.params as { id: string }).id, null, 'operator'))
   f.get('/api/v1/forges/:id/discover', async (req) => {
     const { owner } = z.object({ owner: z.string().min(1) }).parse(req.query)
     const id = (req.params as { id: string }).id
     const known = new Set(listRepos(app.db).map((r) => r.key))
-    const list = await forgeApi(forgeRow(app.db, id)).listRepos(owner)
+    // The owner's private repos are visible to the credential for that owner: ask as any that can.
+    const list = await asAnyCredential(app.db, id, (api) => api.listRepos(owner))
     return list.map((r) => ({ ...r, enrolled: known.has(`${id}~${r.owner}/${r.name}`) }))
   })
 
@@ -296,9 +355,15 @@ export function registerApi(f: FastifyInstance, app: App): void {
   f.patch('/api/v1/groups/:id', async (req) => {
     const id = (req.params as { id: string }).id
     getGroup(app.db, id)
-    const b = z.object({ name: z.string().optional(), policy: z.string().optional() }).parse(req.body)
+    const b = z.object({ name: z.string().optional(), policy: z.string().optional(), credential_id: z.string().nullable().optional() }).parse(req.body)
     if (b.name !== undefined) app.db.prepare('UPDATE groups SET name = ? WHERE id = ?').run(b.name, id)
     if (b.policy !== undefined) app.db.prepare('UPDATE groups SET policy = ? WHERE id = ?').run(b.policy, id)
+    if (b.credential_id !== undefined) {
+      assertPinnable(app.db, b.credential_id)
+      app.db.prepare('UPDATE groups SET credential_id = ? WHERE id = ?').run(b.credential_id, id)
+      logEvent(app.db, { level: 'warn', code: 'GROUP_CREDENTIAL', message: `group ${id}: credential ${b.credential_id ?? 'unpinned'} by operator` })
+      for (const forge of listForges(app.db)) forgeAlert(app, forge.id)
+    }
     return getGroup(app.db, id)
   })
 
@@ -321,6 +386,11 @@ export function registerApi(f: FastifyInstance, app: App): void {
     return { messages: await confirm(app, b.id, b.typed) }
   })
   f.delete('/api/v1/chat', async () => ({ thread: newThread(app) }))
+}
+
+/** The pin choices on the Repo page. */
+function listCredentialsView(app: App, forgeId: string) {
+  return listCredentials(app.db, forgeId).map(credentialView).map((c) => ({ id: c.id, label: c.label, is_default: c.is_default, login: c.auth.login }))
 }
 
 export { newId }

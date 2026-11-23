@@ -26,6 +26,7 @@ export default function Repo() {
             <Badge>{r.forge_id}</Badge>
             <Badge tone={r.visibility === 'public' ? 'blue' : 'stone'}>{r.visibility}</Badge>
             <Badge tone="violet">group {r.group.name}</Badge>
+            <CredentialPin r={r} refresh={refresh} />
             <span className="text-stone-500">line <code>{r.line}</code> at <Sha sha={r.last_head} /> · fetched {ago(r.last_fetch_at)}</span>
           </div>
           {r.fetch_error && <p className="mt-1 text-xs text-red-600">Fetch failed: {r.fetch_error}</p>}
@@ -40,7 +41,7 @@ export default function Repo() {
         <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
           <strong>Fixing is blocked on this repository.</strong> {r.write.why} Lamplighter keeps running rounds and
           writing reports, but drafts, validates and delivers no fix here until it has write access, so nothing is
-          authored only to fail at the push. <Link className="underline" to="/settings">Settings → Forges</Link>
+          authored only to fail at the push. Pick another credential above, or see <Link className="underline" to="/settings">Settings → Forges</Link>.
         </div>
       )}
       <ChecksCard r={r} refresh={refresh} />
@@ -226,5 +227,24 @@ function PolicyCard({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
       {r.group.policy && <p className="text-xs text-stone-500 mt-2">Group “{r.group.name}”: {r.group.policy}</p>}
       <ErrorNote error={save.error} />
     </Card>
+  )
+}
+
+const VIA = { repo: 'pinned', group: `pinned on the group`, auto: 'auto: the one that may push', default: 'forge default' } as const
+
+/** Which account Lamplighter speaks as here: auto by default, or pinned (Settings-only, like tokens). */
+function CredentialPin({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
+  const pin = useMutation({ mutationFn: (credential_id: string | null) => api.patchRepo(r.key, { credential_id }), onSuccess: refresh })
+  if (!r.credentials.length) return null
+  const autoLabel = r.credential && !r.credential_id ? `${r.credential.label} (${VIA[r.credential.via]})` : 'auto'
+  return (
+    <label className="flex items-center gap-1 text-stone-500" title={r.credential ? `${r.credential.label}${r.credential.login ? ` — ${r.credential.login}` : ''} · ${VIA[r.credential.via]}` : undefined}>
+      as
+      <select className={`${inputCls} !w-auto !py-0.5 text-xs`} value={r.credential_id ?? ''} disabled={pin.isPending} onChange={(e) => pin.mutate(e.target.value || null)}>
+        <option value="">{autoLabel}</option>
+        {r.credentials.map((c) => <option key={c.id} value={c.id}>pin: {c.label}{c.login ? ` (${c.login})` : ''}</option>)}
+      </select>
+      {pin.error && <span className="text-red-600">{(pin.error as Error).message}</span>}
+    </label>
   )
 }

@@ -1,4 +1,4 @@
-import type { ForgeApi, ForgeHealth, ForgeRow, PrRef, RemoteRepo } from './types.js'
+import type { CredentialRow, ForgeApi, ForgeHealth, ForgeRow, PrRef, RemoteRepo } from './types.js'
 import { basicAuthHeader, jsonRequest } from './http.js'
 
 interface GtRepo {
@@ -18,7 +18,7 @@ export class GiteaForge implements ForgeApi {
   readonly kind = 'gitea' as const
   private readonly base: string
 
-  constructor(private readonly row: ForgeRow, private readonly fetchImpl: typeof fetch = fetch) {
+  constructor(private readonly row: ForgeRow, private readonly cred: CredentialRow | null = null, private readonly fetchImpl: typeof fetch = fetch) {
     if (!row.base_url) throw new Error('a Gitea forge needs base_url')
     this.base = row.base_url.replace(/\/$/, '')
   }
@@ -26,13 +26,13 @@ export class GiteaForge implements ForgeApi {
   private req<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
     return jsonRequest<T>(this.fetchImpl, `${this.base}/api/v1${path}`, {
       ...init,
-      headers: this.row.token ? { authorization: `token ${this.row.token}` } : {},
+      headers: this.cred?.token ? { authorization: `token ${this.cred.token}` } : {},
     })
   }
 
   async probe(): Promise<ForgeHealth> {
     try {
-      if (!this.row.token) {
+      if (!this.cred?.token) {
         const v = await this.req<{ version: string }>('/version')
         return { ok: true, detail: `anonymous, Gitea ${v.version}` }
       }
@@ -57,7 +57,7 @@ export class GiteaForge implements ForgeApi {
   }
 
   gitAuth(): Record<string, string> {
-    return this.row.token ? basicAuthHeader(this.row.username || 'lamplighter', this.row.token) : {}
+    return this.cred?.token ? basicAuthHeader(this.cred.username || 'lamplighter', this.cred.token) : {}
   }
 
   cloneUrl(owner: string, name: string): string {

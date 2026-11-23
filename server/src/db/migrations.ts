@@ -7,9 +7,22 @@ export const MIGRATIONS: string[] = [
     kind TEXT NOT NULL CHECK (kind IN ('github','gitea','git')),
     name TEXT NOT NULL,
     base_url TEXT,
+    webhook_secret TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  -- An account on a forge: its token (write-only), what its check found, and who its commits are by.
+  CREATE TABLE credentials (
+    id TEXT PRIMARY KEY,
+    forge_id TEXT NOT NULL REFERENCES forges(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
     username TEXT,
     token TEXT,
-    webhook_secret TEXT,
+    token_set_at TEXT,
+    auth_json TEXT,
+    commit_name TEXT,
+    commit_email TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   );
 
@@ -17,7 +30,8 @@ export const MIGRATIONS: string[] = [
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     policy TEXT NOT NULL DEFAULT '',
-    settings_json TEXT NOT NULL DEFAULT '{}'
+    settings_json TEXT NOT NULL DEFAULT '{}',
+    credential_id TEXT REFERENCES credentials(id) ON DELETE SET NULL
   );
 
   CREATE TABLE repos (
@@ -31,6 +45,7 @@ export const MIGRATIONS: string[] = [
     visibility TEXT NOT NULL DEFAULT 'private',
     policy TEXT NOT NULL DEFAULT '',
     settings_json TEXT NOT NULL DEFAULT '{}',
+    credential_id TEXT REFERENCES credentials(id) ON DELETE SET NULL,
     last_fetch_at TEXT,
     last_head TEXT,
     fetch_error TEXT,
@@ -182,7 +197,4 @@ export const MIGRATIONS: string[] = [
   // A proposal for this finding failed or was refused against this input: do not try again
   // until the input changes (Touchstone's task memory, applied to findings).
   `ALTER TABLE findings ADD COLUMN blocked_input TEXT;`,
-  // The forge token, set from Settings the way Touchstone's is: when, and what its check found.
-  `ALTER TABLE forges ADD COLUMN token_set_at TEXT;
-   ALTER TABLE forges ADD COLUMN auth_json TEXT;`,
 ]

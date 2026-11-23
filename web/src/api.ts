@@ -36,6 +36,14 @@ export interface WriteAccess {
   why?: string
 }
 
+/** Which credential a repo uses: pinned on it, pinned on its group, auto (the one that may push), or the forge default. */
+export interface RepoCredential {
+  id: string
+  label: string
+  via: 'repo' | 'group' | 'auto' | 'default'
+  login?: string
+}
+
 export interface RepoSummary {
   key: string
   forge_id: string
@@ -50,6 +58,8 @@ export interface RepoSummary {
   lamps: Record<string, Lamp>
   /** No means the fixing loop is blocked on this repo: rounds and reports only. */
   write: WriteAccess
+  credential_id: string | null
+  credential: RepoCredential | null
 }
 
 export interface CheckSettings {
@@ -168,7 +178,9 @@ export interface RepoDetail extends RepoSummary {
   remote_url: string
   policy: string
   settings: { checks?: Record<string, Partial<CheckSettings>> }
-  group: { id: string; name: string; policy: string }
+  group: Group
+  /** The pin choices: the forge's credentials. */
+  credentials: { id: string; label: string; is_default: boolean; login?: string }[]
   checks: { kind: string; title: string; scopes: string[]; agent: string; settings: CheckSettings }[]
   findings: Finding[]
   rounds: RoundRow[]
@@ -176,21 +188,38 @@ export interface RepoDetail extends RepoSummary {
   events: EventRow[]
 }
 
+export interface Group {
+  id: string
+  name: string
+  policy: string
+  credential_id: string | null
+}
+
+export interface Credential {
+  id: string
+  forge_id: string
+  label: string
+  username: string | null
+  commit_name: string | null
+  commit_email: string | null
+  is_default: boolean
+  /** Write-only: the page learns whether a token is set and what its check found, never the token. */
+  token_set: boolean
+  token_set_at: string | null
+  auth: CredentialAuth
+}
+
 export interface Forge {
   id: string
   kind: 'github' | 'gitea' | 'git'
   name: string
   base_url: string | null
-  username: string | null
-  /** Write-only: the page learns whether a token is set and what its check found, never the token. */
-  token_set: boolean
-  token_set_at: string | null
   webhook_secret: string | null
-  auth: ForgeAuth
-  repos: string[]
+  credentials: Credential[]
+  repos: { repo: string; key: string; credential: RepoCredential | null; write: WriteAccess }[]
 }
 
-export interface ForgeAuth {
+export interface CredentialAuth {
   state: 'unconfigured' | 'unknown' | 'ok' | 'failing'
   login?: string
   user_id?: number
@@ -210,7 +239,7 @@ export interface SettingsView {
   inference_bearer: string | null
   admin_mcp_token: string | null
   forges: Forge[]
-  groups: { id: string; name: string; policy: string }[]
+  groups: Group[]
   checks: { kind: string; title: string; revision: number; scopes: string[]; agent: string; sensitive: string; defaults: CheckSettings; settings: CheckSettings }[]
   check_errors: string[]
   schedule: Schedule
@@ -259,13 +288,17 @@ export const api = {
   addForge: (b: Record<string, unknown>) => request('/api/v1/forges', { method: 'POST', json: b }),
   patchForge: (id: string, b: Record<string, unknown>) => request(`/api/v1/forges/${id}`, { method: 'PATCH', json: b }),
   deleteForge: (id: string) => request(`/api/v1/forges/${id}`, { method: 'DELETE' }),
-  setForgeToken: (id: string, token: string) => request<ForgeAuth>(`/api/v1/forges/${id}/token`, { method: 'PUT', json: { token } }),
-  clearForgeToken: (id: string) => request<ForgeAuth>(`/api/v1/forges/${id}/token`, { method: 'DELETE' }),
-  checkForge: (id: string) => request<ForgeAuth>(`/api/v1/forges/${id}/auth/check`, { method: 'POST' }),
+  checkForge: (id: string) => request<Forge>(`/api/v1/forges/${id}/auth/check`, { method: 'POST' }),
+  addCredential: (forge: string, b: Partial<Omit<Credential, 'id' | 'auth'>> & { label: string }) => request<Credential>(`/api/v1/forges/${forge}/credentials`, { method: 'POST', json: b }),
+  patchCredential: (id: string, b: Partial<Pick<Credential, 'label' | 'username' | 'commit_name' | 'commit_email' | 'is_default'>>) => request<Credential>(`/api/v1/credentials/${id}`, { method: 'PATCH', json: b }),
+  deleteCredential: (id: string) => request(`/api/v1/credentials/${id}`, { method: 'DELETE' }),
+  setCredentialToken: (id: string, token: string) => request<CredentialAuth>(`/api/v1/credentials/${id}/token`, { method: 'PUT', json: { token } }),
+  clearCredentialToken: (id: string) => request<CredentialAuth>(`/api/v1/credentials/${id}/token`, { method: 'DELETE' }),
+  checkCredential: (id: string) => request<CredentialAuth>(`/api/v1/credentials/${id}/check`, { method: 'POST' }),
   probeForge: (id: string) => request<{ ok: boolean; detail: string }>(`/api/v1/forges/${id}/probe`, { method: 'POST' }),
   discover: (id: string, owner: string) => request<{ owner: string; name: string; defaultBranch: string; visibility: string; enrolled: boolean }[]>(`/api/v1/forges/${id}/discover?owner=${encodeURIComponent(owner)}`),
   addGroup: (b: { id: string; name: string }) => request('/api/v1/groups', { method: 'POST', json: b }),
-  patchGroup: (id: string, b: { policy?: string; name?: string }) => request(`/api/v1/groups/${id}`, { method: 'PATCH', json: b }),
+  patchGroup: (id: string, b: { policy?: string; name?: string; credential_id?: string | null }) => request(`/api/v1/groups/${id}`, { method: 'PATCH', json: b }),
   schedule: () => request<Schedule>('/api/v1/schedule'),
   cancelJob: (id: string) => request(`/api/v1/queue/${id}`, { method: 'DELETE' }),
   chat: () => request<{ messages: ChatMessage[] }>('/api/v1/chat'),

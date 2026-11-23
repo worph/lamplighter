@@ -5,18 +5,34 @@ export interface ForgeRow {
   kind: ForgeKind
   name: string
   base_url: string | null
-  username: string | null
-  token: string | null
   webhook_secret: string | null
   created_at: string
-  /** When the token was last set from the Settings page (never the token itself). */
-  token_set_at: string | null
-  /** The last token check, JSON `ForgeAuth`. */
-  auth_json: string | null
 }
 
-/** What the token check made of a forge's token (Touchstone's GitHubStatus, per forge). */
-export interface ForgeAuth {
+/**
+ * One account on a forge. A forge holds several (you, an organisation's token, a bot); each repo
+ * uses one, pinned on the repo or its group, or else the one whose check says it may push there.
+ */
+export interface CredentialRow {
+  id: string
+  forge_id: string
+  label: string
+  /** The git HTTP username; empty uses the forge's convention. */
+  username: string | null
+  token: string | null
+  /** When the token was last set from the Settings page (never the token itself). */
+  token_set_at: string | null
+  /** The last token check, JSON `CredentialAuth`. */
+  auth_json: string | null
+  /** Who commits pushed with this credential are by; empty falls back to General → identity. */
+  commit_name: string | null
+  commit_email: string | null
+  is_default: number
+  created_at: string
+}
+
+/** What the token check made of a credential's token (Touchstone's GitHubStatus, per credential). */
+export interface CredentialAuth {
   state: 'unconfigured' | 'unknown' | 'ok' | 'failing'
   login?: string
   user_id?: number

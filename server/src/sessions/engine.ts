@@ -263,7 +263,7 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
       return pid
     }
     const summary = session.done?.text ?? result.text
-    const id = commitIdentity(app, repo.forge_id)
+    const id = commitIdentity(app, repo)
     await git(['add', '-A'], { cwd: worktree })
     await git(['commit', '-q', '-F', '-'], {
       cwd: worktree,

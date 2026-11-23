@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { ago, api, type CheckSettings, type SettingsView } from '../api'
+import { Link } from 'react-router-dom'
+import { ago, api, type CheckSettings, type Credential, type Forge, type Group, type RepoCredential, type SettingsView } from '../api'
 import { Badge, Button, Card, ErrorNote, Field, inputCls } from '../components/ui'
 
 export default function Settings() {
@@ -107,7 +108,7 @@ function General({ s }: { s: SettingsView }) {
           <input className={inputCls} value={url} onChange={(e) => setUrl(e.target.value)} />
         </Field>
         <Field label="Commit author name"><input className={inputCls} value={id.name} onChange={(e) => setId({ ...id, name: e.target.value })} /></Field>
-        <Field label="Commit author email" hint="empty: the GitHub token account’s noreply address"><input className={inputCls} value={id.email} onChange={(e) => setId({ ...id, email: e.target.value })} /></Field>
+        <Field label="Commit author email" hint="a credential’s own wins; empty: a GitHub credential’s noreply address"><input className={inputCls} value={id.email} onChange={(e) => setId({ ...id, email: e.target.value })} /></Field>
       </div>
       <ErrorNote error={save.error} />
     </Card>
@@ -116,14 +117,14 @@ function General({ s }: { s: SettingsView }) {
 
 function Forges({ s }: { s: SettingsView }) {
   const refresh = useRefresh()
-  const blank = { id: '', kind: 'github', name: '', base_url: '', username: '', webhook_secret: '' }
+  const blank = { id: '', kind: 'github', name: '', base_url: '', webhook_secret: '' }
   const [f, setF] = useState(blank)
   const [probe, setProbe] = useState<Record<string, { ok: boolean; detail: string }>>({})
   const add = useMutation({ mutationFn: () => api.addForge(f), onSuccess: () => { setF(blank); refresh() } })
   const del = useMutation({ mutationFn: (id: string) => api.deleteForge(id), onSuccess: refresh })
   const doProbe = useMutation({ mutationFn: (id: string) => api.probeForge(id), onSuccess: (d, id) => setProbe((p) => ({ ...p, [id]: d })) })
   return (
-    <Card title="Forges">
+    <Card title="Forges & credentials">
       <ul className="divide-y divide-stone-100 dark:divide-stone-800 text-sm mb-4">
         {s.forges.map((x) => (
           <li key={x.id} className="py-3">
@@ -140,7 +141,7 @@ function Forges({ s }: { s: SettingsView }) {
             {x.webhook_secret && x.kind !== 'git' && <div className="mt-1 text-[11px] text-stone-500">Webhook URL: <code>{s.config.public_url}/hooks/{x.kind}/{x.id}</code> (push events, JSON, with the secret)</div>}
             {x.kind === 'git'
               ? <p className="mt-1 text-[11px] text-stone-500">Bare git authenticates with the container’s SSH key (or the remote’s own credentials), not a token.</p>
-              : <ForgeToken forge={x} identity={s.config.identity} />}
+              : <ForgeCredentials forge={x} identity={s.config.identity} />}
           </li>
         ))}
       </ul>
@@ -155,11 +156,10 @@ function Forges({ s }: { s: SettingsView }) {
         <Field label={f.kind === 'git' ? 'Remote prefix' : f.kind === 'gitea' ? 'Base URL' : 'API URL (optional)'} hint={f.kind === 'git' ? 'e.g. ssh://git@host/srv or a path' : undefined}>
           <input className={inputCls} value={f.base_url} onChange={(e) => setF({ ...f, base_url: e.target.value })} placeholder={f.kind === 'gitea' ? 'https://gitea.example' : ''} />
         </Field>
-        <Field label="Username (git auth, optional)"><input className={inputCls} value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} /></Field>
         <Field label="Webhook secret (optional)"><input type="password" className={inputCls} value={f.webhook_secret} onChange={(e) => setF({ ...f, webhook_secret: e.target.value })} /></Field>
         <div className="flex items-end"><Button variant="primary" disabled={!f.id || !f.name} onClick={() => add.mutate()}>Add forge</Button></div>
       </div>
-      <p className="mt-2 text-[11px] text-stone-500">The token is set on the forge once it is added.</p>
+      <p className="mt-2 text-[11px] text-stone-500">One forge per host. Its credentials — one per account or organisation — are added on the forge once it exists.</p>
       <ErrorNote error={add.error || del.error || doProbe.error} />
     </Card>
   )
@@ -168,95 +168,167 @@ function Forges({ s }: { s: SettingsView }) {
 const GH_TOKENS_URL = 'https://github.com/settings/tokens'
 const GH_NEW_FINE_GRAINED_URL = 'https://github.com/settings/personal-access-tokens/new'
 
+const VIA: Record<RepoCredential['via'], string> = { repo: 'pinned', group: 'group pin', auto: 'auto', default: 'default' }
+
 /**
- * A forge's token, Touchstone's way: what kind to make, exactly how to scope it, and the field
- * to paste it into. Write-only — the page never shows the token in use, and the field is emptied
- * on save. The answer to "does it work" comes back with the save.
+ * A forge's credentials: one per account Lamplighter speaks as. Each repo uses the one pinned on it
+ * or its group, else the one whose check says it may push there, else the forge default.
  */
-function ForgeToken({ forge: x, identity }: { forge: SettingsView['forges'][number]; identity: { name: string; email: string } }) {
+function ForgeCredentials({ forge: x, identity }: { forge: Forge; identity: { name: string; email: string } }) {
+  const refresh = useRefresh()
+  const [label, setLabel] = useState('')
+  const add = useMutation({ mutationFn: () => api.addCredential(x.id, { label }), onSuccess: () => { setLabel(''); refresh() } })
+  const check = useMutation({ mutationFn: () => api.checkForge(x.id), onSuccess: refresh })
+  const blocked = x.repos.filter((r) => !r.write.ok)
+  const owners = [...new Set(x.repos.map((r) => r.repo.split('/')[0]).filter(Boolean))]
+  return (
+    <div className="mt-3 space-y-3">
+      <TokenGuide forge={x} owners={owners} />
+      {x.credentials.map((c) => <CredentialCard key={c.id} forge={x} c={c} identity={identity} />)}
+      {x.credentials.length === 0 && <p className="text-xs text-amber-700 dark:text-amber-300">No credential: Lamplighter reads public repositories here and cannot push, open pull requests or see private ones.</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <input className={`${inputCls} !w-auto flex-1 min-w-[12rem]`} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={x.kind === 'github' ? 'e.g. “Me”, “Acme org”, “lamp-bot”' : 'e.g. “lamp-bot”'}
+          onKeyDown={(e) => { if (e.key === 'Enter' && label.trim()) add.mutate() }} />
+        <Button disabled={!label.trim() || add.isPending} onClick={() => add.mutate()}>Add credential</Button>
+        {x.credentials.some((c) => c.token_set) && <Button disabled={check.isPending} onClick={() => check.mutate()}>{check.isPending ? 'checking…' : 'Check all'}</Button>}
+      </div>
+      {x.repos.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-stone-600 dark:text-stone-400">
+            Which credential each repository uses — {x.repos.length - blocked.length} of {x.repos.length} can be fixed{blocked.length ? `, ${blocked.length} read-only` : ''}
+          </summary>
+          <p className="mt-1 text-[11px] text-stone-500">Pin a credential on a repository (its page) or on a group (Groups & policy below); otherwise the one that may push there is used.</p>
+          <ul className="mt-1 space-y-0.5">
+            {x.repos.map((r) => (
+              <li key={r.key} className="flex flex-wrap items-center gap-2">
+                <Link to={`/repos/${encodeURIComponent(r.key)}`} className="hover:underline"><code>{r.repo}</code></Link>
+                {r.credential ? <Badge tone={r.credential.via === 'repo' || r.credential.via === 'group' ? 'violet' : 'stone'}>{r.credential.label} · {VIA[r.credential.via]}</Badge> : <Badge tone="amber">no credential</Badge>}
+                {!r.write.ok && <span className="text-amber-700 dark:text-amber-300" title={r.write.why}>read-only</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <ErrorNote error={add.error || check.error} />
+    </div>
+  )
+}
+
+/** What kind of token to make and exactly how to scope it (Touchstone's guide). */
+function TokenGuide({ forge: x, owners }: { forge: Forge; owners: string[] }) {
+  const list = (items: string[]) => items.length ? items.map((o, i) => <span key={o}>{i ? ', ' : ''}<code>{o}</code></span>) : null
+  return (
+    <details className="rounded-md border border-stone-200 dark:border-stone-800 p-3 text-xs text-stone-600 dark:text-stone-400 leading-relaxed">
+      <summary className="cursor-pointer font-medium">How to make a {x.kind === 'github' ? 'GitHub' : 'Gitea'} token</summary>
+      <p className="mt-2">
+        Each credential is an account Lamplighter pushes branches, pushes and pull requests as. Everything it delivers
+        carries that account’s name, so use one that may speak for those repositories: a bot account,
+        or an organisation-owned token — not your personal one unless you want the changes to be yours.
+        {x.kind === 'github' && <> Make a <strong>fine-grained</strong> personal access token, <strong>not a classic one</strong>: a classic token reaches every repository the account can, a fine-grained one only the repositories you pick.</>}
+      </p>
+      {x.kind === 'github' ? (
+        <ol className="mt-2 list-decimal pl-5 space-y-0.5">
+          <li>Open <a className="underline" href={GH_TOKENS_URL} target="_blank" rel="noreferrer">github.com/settings/tokens</a> → <em>Fine-grained tokens</em> → <em>Generate new token</em> (or go <a className="underline" href={GH_NEW_FINE_GRAINED_URL} target="_blank" rel="noreferrer">straight to the form</a>).</li>
+          <li><strong>Resource owner:</strong> one token reaches one owner, so add <strong>one credential per owner</strong>{owners.length ? <> ({list(owners)})</> : ''}. Each repository then uses the credential that may push there, with no pinning. For an organisation, pick the organisation, not your own account.</li>
+          <li><strong>Repository access:</strong> <em>Only select repositories</em> → the ones Lamplighter monitors under that owner. Add new ones to the token as you add them here.</li>
+          <li><strong>Repository permissions:</strong> <em>Contents</em> read and write (to push its <code>lamplighter/…</code> branches, or the line for <code>push</code> delivery), <em>Pull requests</em> read and write, <em>Metadata</em> read-only (GitHub adds it). Nothing else.</li>
+          <li><strong>Expiration</strong> is your call. When it lapses the credential turns failing and an alert opens; paste a new one here.</li>
+          <li>If the organisation requires approval, an owner approves it under the organisation’s <em>Settings → Personal access tokens</em>; until then GitHub refuses it.</li>
+        </ol>
+      ) : (
+        <ol className="mt-2 list-decimal pl-5 space-y-0.5">
+          <li>On {x.base_url ? <code>{x.base_url}</code> : 'the Gitea instance'}, signed in as the account Lamplighter should act as: <em>Settings → Applications → Generate new token</em>.</li>
+          <li><strong>Permissions:</strong> <em>repository</em> read and write, <em>issue</em> read and write (labels on pull requests), <em>user</em> read. Nothing else.</li>
+          <li>The account needs write access to the repositories that should use it.</li>
+        </ol>
+      )}
+      <p className="mt-1">
+        Once, by hand, on each repository: create a <code>lamplighter</code> label{x.kind === 'github' ? ' — the token deliberately cannot create labels; without it pull requests still open, unlabelled' : ' (Lamplighter creates it if the token may)'}.
+      </p>
+    </details>
+  )
+}
+
+/**
+ * One credential, Touchstone's way: write-only token (the field is emptied on save and the token
+ * is never shown), checked in the same response, plus who its commits are by.
+ */
+function CredentialCard({ forge: x, c, identity }: { forge: Forge; c: Credential; identity: { name: string; email: string } }) {
   const refresh = useRefresh()
   const [token, setToken] = useState('')
+  const [f, setF] = useState({ label: c.label, username: c.username ?? '', commit_name: c.commit_name ?? '', commit_email: c.commit_email ?? '' })
+  useEffect(() => { setF({ label: c.label, username: c.username ?? '', commit_name: c.commit_name ?? '', commit_email: c.commit_email ?? '' }) }, [c.label, c.username, c.commit_name, c.commit_email])
   const done = () => { setToken(''); refresh() }
-  const save = useMutation({ mutationFn: () => api.setForgeToken(x.id, token), onSuccess: done })
-  const clear = useMutation({ mutationFn: () => api.clearForgeToken(x.id), onSuccess: done })
-  const check = useMutation({ mutationFn: () => api.checkForge(x.id), onSuccess: refresh })
+  const save = useMutation({ mutationFn: () => api.setCredentialToken(c.id, token), onSuccess: done })
+  const clear = useMutation({ mutationFn: () => api.clearCredentialToken(c.id), onSuccess: done })
+  const check = useMutation({ mutationFn: () => api.checkCredential(c.id), onSuccess: refresh })
+  const patch = useMutation({ mutationFn: (b: Parameters<typeof api.patchCredential>[1]) => api.patchCredential(c.id, b), onSuccess: refresh })
+  const remove = useMutation({ mutationFn: () => api.deleteCredential(c.id), onSuccess: refresh })
   const busy = save.isPending || clear.isPending || check.isPending
-  const a = x.auth
-  const owners = [...new Set(x.repos.map((r) => r.split('/')[0]).filter(Boolean))]
-  const list = (items: string[]) => items.length ? items.map((o, i) => <span key={o}>{i ? ', ' : ''}<code>{o}</code></span>) : null
+  const a = c.auth
+  const dirty = f.label !== c.label || f.username !== (c.username ?? '') || f.commit_name !== (c.commit_name ?? '') || f.commit_email !== (c.commit_email ?? '')
+  const pushes = a.repos?.filter((r) => r.push).length ?? 0
   const status =
     a.state === 'ok' ? `works — as ${a.login}`
       : a.state === 'failing' ? `does not work — ${a.problems.join('; ')}`
         : a.state === 'unknown' ? 'not checked yet'
-          : 'no token: Lamplighter reads public repositories and cannot push, open pull requests or see private ones'
-  const usesNoreply = !identity.email || identity.email === 'lamplighter@localhost'
+          : 'no token yet'
+  const usesNoreply = !c.commit_email && (!identity.email || identity.email === 'lamplighter@localhost')
   return (
-    <div className="mt-3 rounded-md border border-stone-200 dark:border-stone-800 p-3">
+    <div className="rounded-md border border-stone-200 dark:border-stone-800 p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-stone-500">{x.kind === 'github' ? 'GitHub' : 'Gitea'} token</span>
-        <Badge tone={x.token_set ? 'stone' : 'amber'}>{x.token_set ? (x.token_set_at ? `set here ${ago(x.token_set_at)}` : 'set') : 'no token'}</Badge>
+        <span className="font-medium">{c.label}</span>
+        {c.is_default ? <Badge tone="blue">default</Badge> : <button className="text-[11px] underline text-stone-500" onClick={() => patch.mutate({ is_default: true })}>make default</button>}
+        <Badge tone={c.token_set ? 'stone' : 'amber'}>{c.token_set ? (c.token_set_at ? `token set ${ago(c.token_set_at)}` : 'token set') : 'no token'}</Badge>
         <Badge tone={a.state === 'ok' ? 'green' : a.state === 'failing' ? 'red' : 'stone'}>{status}</Badge>
         {a.checked_at && <span className="text-[11px] text-stone-500">checked {ago(a.checked_at)}</span>}
+        <Button variant="danger" className="ml-auto !py-1 text-xs" disabled={remove.isPending}
+          onClick={() => { if (window.confirm(`Remove the “${c.label}” credential? Repositories and groups pinned to it go back to auto.`)) remove.mutate() }}>Remove</Button>
       </div>
 
-      <p className="mt-2 text-xs text-stone-600 dark:text-stone-400 leading-relaxed">
-        The account Lamplighter pushes branches, pushes and pull requests as. Everything it delivers
-        carries that account’s name, so use one that may speak for these repositories: a bot account,
-        or an organisation-owned token — not your personal one unless you want the changes to be yours.
-        {x.kind === 'github' && <> Make a <strong>fine-grained</strong> personal access token, <strong>not a classic one</strong>: a classic token reaches every repository the account can, a fine-grained one only the repositories you pick.</>}
-      </p>
-
-      {x.kind === 'github' ? (
-        <ol className="mt-2 list-decimal pl-5 text-xs text-stone-600 dark:text-stone-400 leading-relaxed space-y-0.5">
-          <li>Open <a className="underline" href={GH_TOKENS_URL} target="_blank" rel="noreferrer">github.com/settings/tokens</a> → <em>Fine-grained tokens</em> → <em>Generate new token</em> (or go <a className="underline" href={GH_NEW_FINE_GRAINED_URL} target="_blank" rel="noreferrer">straight to the form</a>).</li>
-          <li><strong>Resource owner:</strong> {list(owners) ?? 'the owner of the repositories'}{owners.length > 1 ? ' — one token reaches one owner; repositories under another owner need that owner’s token on a second forge' : ''}. For an organisation, pick the organisation, not your own account.</li>
-          <li><strong>Repository access:</strong> <em>Only select repositories</em> → {list(x.repos.map((r) => r.split('/')[1] ?? r)) ?? 'the repositories Lamplighter monitors'}. Add new ones to the token as you add them here.</li>
-          <li><strong>Repository permissions:</strong> <em>Contents</em> read and write (to push its <code>lamplighter/…</code> branches, or the line for <code>push</code> delivery), <em>Pull requests</em> read and write, <em>Metadata</em> read-only (GitHub adds it). Nothing else.</li>
-          <li><strong>Expiration</strong> is your call. When it lapses the status turns failing and an alert opens; paste a new one here.</li>
-          <li>If the organisation requires approval, an owner approves it under the organisation’s <em>Settings → Personal access tokens</em>; until then GitHub refuses it.</li>
-        </ol>
-      ) : (
-        <ol className="mt-2 list-decimal pl-5 text-xs text-stone-600 dark:text-stone-400 leading-relaxed space-y-0.5">
-          <li>On {x.base_url ? <code>{x.base_url}</code> : 'the Gitea instance'}, signed in as the account Lamplighter should act as: <em>Settings → Applications → Generate new token</em>.</li>
-          <li><strong>Permissions:</strong> <em>repository</em> read and write, <em>issue</em> read and write (labels on pull requests), <em>user</em> read. Nothing else.</li>
-          <li>The account needs write access to {list(x.repos) ?? 'the repositories Lamplighter monitors'}.</li>
-        </ol>
-      )}
-      <p className="mt-1 text-xs text-stone-600 dark:text-stone-400">
-        Once, by hand, on each repository: create a <code>lamplighter</code> label{x.kind === 'github' ? ' — the token deliberately cannot create labels; without it pull requests still open, unlabelled' : ' (Lamplighter creates it if the token may)'}.
-      </p>
+      <div className="mt-2 grid gap-2 md:grid-cols-4">
+        <Field label="Label"><input className={inputCls} value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} /></Field>
+        <Field label="Git username (optional)" hint={x.kind === 'github' ? 'empty: x-access-token' : 'empty: lamplighter'}><input className={inputCls} value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} /></Field>
+        <Field label="Commit author name" hint={`empty: ${identity.name || 'Lamplighter'} (General)`}><input className={inputCls} value={f.commit_name} onChange={(e) => setF({ ...f, commit_name: e.target.value })} /></Field>
+        <Field label="Commit author email" hint={usesNoreply && a.login && x.kind === 'github' ? `empty: ${a.user_id}+${a.login}@users.noreply.github.com` : 'empty: General → commit author email'}>
+          <input className={inputCls} value={f.commit_email} onChange={(e) => setF({ ...f, commit_email: e.target.value })} />
+        </Field>
+      </div>
+      {dirty && <div className="mt-2"><Button className="!py-1 text-xs" variant="primary" disabled={patch.isPending} onClick={() => patch.mutate(f)}>Save details</Button></div>}
 
       {a.repos && a.repos.length > 0 && (
-        <ul className="mt-2 text-xs space-y-0.5">
-          {a.repos.map((r) => (
-            <li key={r.repo} className="flex flex-wrap gap-2 items-center">
-              <Badge tone={r.push ? 'green' : 'red'}>{r.push ? 'can push' : 'cannot push'}</Badge><code>{r.repo}</code>
-              {r.detail && <span className="text-stone-500">{r.detail}</span>}
-            </li>
-          ))}
-        </ul>
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer text-stone-600 dark:text-stone-400">May push to {pushes} of {a.repos.length} repositories on {x.name}</summary>
+          <ul className="mt-1 space-y-0.5">
+            {a.repos.map((r) => (
+              <li key={r.repo} className="flex flex-wrap gap-2 items-center">
+                <Badge tone={r.push ? 'green' : 'stone'}>{r.push ? 'can push' : 'cannot push'}</Badge><code>{r.repo}</code>
+                {r.detail && <span className="text-stone-500">{r.detail}</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <input
-          type="password" autoComplete="off" spellCheck={false} aria-label={`${x.name} token`}
+          type="password" autoComplete="off" spellCheck={false} aria-label={`${c.label} token`}
           className={`${inputCls} !w-auto flex-1 min-w-[14rem]`}
-          placeholder={x.token_set ? 'paste a new token to replace it' : x.kind === 'github' ? 'github_pat_…' : 'token'}
+          placeholder={c.token_set ? 'paste a new token to replace it' : x.kind === 'github' ? 'github_pat_…' : 'token'}
           value={token} onChange={(e) => setToken(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && token.trim() && !busy) save.mutate() }}
         />
-        <Button variant="primary" disabled={busy || !token.trim()} onClick={() => save.mutate()}>{save.isPending ? 'checking…' : x.token_set ? 'Replace' : 'Save'}</Button>
-        {x.token_set && <Button disabled={busy} onClick={() => check.mutate()}>{check.isPending ? 'checking…' : 'Check again'}</Button>}
-        {x.token_set && (
-          <Button variant="danger" disabled={busy} onClick={() => { if (window.confirm(`Clear the ${x.name} token? Lamplighter will read anonymously and deliver nothing there.`)) clear.mutate() }}>Clear</Button>
+        <Button variant="primary" disabled={busy || !token.trim()} onClick={() => save.mutate()}>{save.isPending ? 'checking…' : c.token_set ? 'Replace' : 'Save'}</Button>
+        {c.token_set && <Button disabled={busy} onClick={() => check.mutate()}>{check.isPending ? 'checking…' : 'Check again'}</Button>}
+        {c.token_set && (
+          <Button variant="danger" disabled={busy} onClick={() => { if (window.confirm(`Clear the “${c.label}” token? Repositories using it can no longer be fixed.`)) clear.mutate() }}>Clear token</Button>
         )}
       </div>
       <p className="mt-2 text-[11px] text-stone-500">
         Kept in Lamplighter’s database and never shown again. It takes effect at once, and it is checked every
-        half hour. Only this page can set it: the chat and the admin MCP cannot choose whose name Lamplighter pushes under.
-        {x.kind === 'github' && usesNoreply && a.login && <> Commits are authored as <code>{identity.name || 'Lamplighter'} &lt;{a.user_id}+{a.login}@users.noreply.github.com&gt;</code> (General → commit author email is empty), so GitHub attributes them to {a.login}.</>}
+        half hour. Only this page sets tokens and pins: the chat and the admin MCP cannot choose whose name Lamplighter pushes under.
       </p>
-      <ErrorNote error={save.error || clear.error || check.error} />
+      <ErrorNote error={save.error || clear.error || check.error || patch.error || remove.error} />
     </div>
   )
 }
@@ -349,7 +421,7 @@ function Groups({ s }: { s: SettingsView }) {
   return (
     <Card title="Groups & policy">
       <div className="space-y-3">
-        {s.groups.map((g) => <GroupRow key={g.id} g={g} onSaved={refresh} />)}
+        {s.groups.map((g) => <GroupRow key={g.id} g={g} forges={s.forges} onSaved={refresh} />)}
       </div>
       <div className="mt-3 flex gap-2 items-end">
         <Field label="New group id"><input className={inputCls} value={n.id} onChange={(e) => setN({ ...n, id: e.target.value })} placeholder="yundera" /></Field>
@@ -361,14 +433,33 @@ function Groups({ s }: { s: SettingsView }) {
   )
 }
 
-function GroupRow({ g, onSaved }: { g: { id: string; name: string; policy: string }; onSaved: () => void }) {
+function GroupRow({ g, forges, onSaved }: { g: Group; forges: Forge[]; onSaved: () => void }) {
   const [policy, setPolicy] = useState(g.policy)
   const save = useMutation({ mutationFn: () => api.patchGroup(g.id, { policy }), onSuccess: onSaved })
+  const pin = useMutation({ mutationFn: (credential_id: string | null) => api.patchGroup(g.id, { credential_id }), onSuccess: onSaved })
+  const withCreds = forges.filter((x) => x.credentials.length)
   return (
     <div>
-      <div className="flex items-center justify-between"><span className="text-sm font-medium">{g.name} <code className="text-xs text-stone-500">{g.id}</code></span>
-        <Button className="!py-1 text-xs" disabled={policy === g.policy} onClick={() => save.mutate()}>Save policy</Button></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-medium">{g.name} <code className="text-xs text-stone-500">{g.id}</code></span>
+        <span className="flex flex-wrap items-center gap-2">
+          {withCreds.length > 0 && (
+            <label className="text-xs text-stone-500 flex items-center gap-1" title="Applies to this group's repositories on that credential's forge; a repository's own pin wins">
+              Credential
+              <select className={`${inputCls} !w-auto !py-1 text-xs`} value={g.credential_id ?? ''} onChange={(e) => pin.mutate(e.target.value || null)}>
+                <option value="">auto (the one that may push)</option>
+                {withCreds.map((x) => (
+                  <optgroup key={x.id} label={x.name}>
+                    {x.credentials.map((c) => <option key={c.id} value={c.id}>{x.name} · {c.label}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+          )}
+          <Button className="!py-1 text-xs" disabled={policy === g.policy} onClick={() => save.mutate()}>Save policy</Button>
+        </span>
+      </div>
       <textarea className={`${inputCls} mt-1 min-h-16 font-mono text-xs`} value={policy} onChange={(e) => setPolicy(e.target.value)} />
+      <ErrorNote error={save.error || pin.error} />
     </div>
   )
 }

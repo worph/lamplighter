@@ -1,8 +1,8 @@
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
-import { forgeApi, forgeRow } from '../forges/index.js'
-import { assertCanDeliver, commitIdentity, deliveryBlocker } from '../forges/auth.js'
+import { forgeRow } from '../forges/index.js'
+import { apiFor, assertCanDeliver, commitIdentity, deliveryBlocker } from '../forges/auth.js'
 import { git } from '../forges/gitcli.js'
 import { asOwnBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
 import { addItem, openItemFor, recordOverride, resolveFor } from '../activity/index.js'
@@ -84,7 +84,7 @@ async function visibility(app: App, repo: RepoRow): Promise<RepoRow['visibility'
   const forge = forgeRow(app.db, repo.forge_id)
   if (forge.kind === 'git') return repo.visibility
   try {
-    const info = await forgeApi(forge).repoInfo(repo.owner, repo.name)
+    const info = await apiFor(app.db, repo).repoInfo(repo.owner, repo.name)
     if (info.visibility !== repo.visibility) app.db.prepare('UPDATE repos SET visibility = ? WHERE key = ?').run(info.visibility, repo.key)
     return info.visibility
   } catch {
@@ -111,7 +111,7 @@ export async function afterReady(app: App, id: string): Promise<void> {
   const s = def ? resolveSettings(def, app.config.current, parseSettings(getGroup(app.db, repo.group_id).settings_json), parseSettings(repo.settings_json)) : undefined
   let waiting = ''
   if (s?.auto_submit) {
-    const blocker = deliveryBlocker(forgeRow(app.db, repo.forge_id), `${repo.owner}/${repo.name}`)
+    const blocker = deliveryBlocker(app, repo)
     if (blocker) waiting = ` (auto-submit waiting: ${blocker})`
     else if (deliveriesToday(app) >= app.config.current.schedule.deliveries_per_day) waiting = ' (auto-submit waiting on the daily delivery cap)'
     else {
@@ -139,7 +139,7 @@ export async function deliver(app: App, id: string, by: string): Promise<Proposa
   if (!p.head_sha) throw new Error('proposal has no commit')
   const repo = getRepo(app.db, p.repo_key)
   const forge = forgeRow(app.db, repo.forge_id)
-  assertCanDeliver(forge, `${repo.owner}/${repo.name}`)
+  assertCanDeliver(app, repo)
   const branch = asOwnBranch(p.branch)
   try {
     if (p.delivery === 'push') {
@@ -150,7 +150,7 @@ export async function deliver(app: App, id: string, by: string): Promise<Proposa
       addItem(app.db, { kind: 'pushed', repo: repo.key, ref: id, sensitive: !!p.sensitive, title: `Pushed to ${repo.line}: ${title(p)}`, body: `${p.head_sha.slice(0, 10)} fast-forwarded ${repo.line}. Revert is one click.` })
     } else if (p.delivery === 'pr' && forge.kind !== 'git') {
       await pushOwnBranch(app.mirrors, repo, branch, p.head_sha)
-      const api = forgeApi(forge)
+      const api = apiFor(app.db, repo)
       let pr
       try {
         pr = await api.openPr!(repo.owner, repo.name, { head: branch, base: repo.line, title: title(p), body: prBody(p) })
@@ -230,12 +230,12 @@ export async function revertPush(app: App, id: string, by: string): Promise<Prop
   const p = mustGet(app, id)
   if (p.state !== 'landed' || p.delivery !== 'push' || !p.head_sha) throw new Error('only a pushed proposal can be reverted')
   const repo = getRepo(app.db, p.repo_key)
-  assertCanDeliver(forgeRow(app.db, repo.forge_id), `${repo.owner}/${repo.name}`)
+  assertCanDeliver(app, repo)
   const head = await app.mirrors.fetch(repo)
   const wtId = newId('rv')
   const wt = await app.mirrors.addWorktree(repo, wtId, head)
   try {
-    const ident = commitIdentity(app, repo.forge_id)
+    const ident = commitIdentity(app, repo)
     await git(['revert', '--no-commit', `${p.base_sha}..${p.head_sha}`], { cwd: wt, config: { 'user.name': ident.name, 'user.email': ident.email } })
     await git(['commit', '-q', '-F', '-'], {
       cwd: wt,
@@ -265,7 +265,7 @@ export async function pollPullRequests(app: App): Promise<void> {
     const ref = JSON.parse(p.submitted_ref ?? '{}') as { number?: number }
     if (!ref.number) continue
     const repo = getRepo(app.db, p.repo_key)
-    const api = forgeApi(forgeRow(app.db, repo.forge_id))
+    const api = apiFor(app.db, repo)
     try {
       const state = await api.prState!(repo.owner, repo.name, ref.number)
       if (state === 'open') continue

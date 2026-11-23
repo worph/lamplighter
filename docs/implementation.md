@@ -110,21 +110,39 @@ Apps/Lamplighter/     store listing for a Yundera box: backend + beaconify + App
 | `LAMPLIGHTER_ADMIN_MCP_TOKEN` | (db) | admin MCP bearer, shared with the beaconify sidecar |
 | `LAMPLIGHTER_DATA_DIR`, `_PORT`, `_HOST`, `_LOG_LEVEL` | — | runtime |
 
-Forge tokens are set the way Touchstone sets its GitHub token: in Settings → Forges, one section per
-GitHub/Gitea forge that says what kind of token to make and how to scope it (fine-grained; Contents
-and Pull requests read/write; only the monitored repositories). They are stored in the database and
-**write-only**: no route returns them (`PUT|DELETE /api/v1/forges/:id/token`), and no chat or
-admin-MCP tool can set one. Each save is checked in the same response (`forges/auth.ts`): whose
-token it is, and whether it may push to each monitored repo (account role, then the token's own
-Contents grant). The check reruns every 30 minutes; a failing one opens one alert per forge.
+A forge holds several **credentials** (table `credentials`): one per account Lamplighter speaks as
+there — you, an organisation's token, a bot. A fine-grained GitHub token reaches one resource
+owner, so personal and organisation repos on github.com are two credentials on one forge. Tokens
+are set the way Touchstone sets its GitHub token: in Settings → Forges & credentials, with a guide
+to what kind of token to make and how to scope it (fine-grained; Contents and Pull requests
+read/write; only the monitored repositories). They are stored in the database and **write-only**:
+no route returns them (`PUT|DELETE /api/v1/credentials/:id/token`), and no chat or admin-MCP tool
+can set one. Each save is checked in the same response (`forges/auth.ts`): whose token it is, and
+whether it may push to each monitored repo on its forge (account role, then the token's own
+Contents grant). The checks rerun every 30 minutes.
+
+Each repo uses one credential (`credentialFor`), first match wins:
+
+1. pinned on the repo (`repos.credential_id`, the Repo page's "as" selector);
+2. pinned on its group (`groups.credential_id`), when that credential is on the repo's forge;
+3. **auto**: a credential whose last check says it may push there, the forge's default first;
+4. the forge's default (its first credential, or the one marked default), which then cannot push.
+
+With one credential per owner, step 3 assigns a whole fleet with no pins. Pins, like tokens, are
+set only from Settings/the Repo page, never from the chat or admin MCP. A token a forge refuses,
+or a repo no credential may push to, opens one alert per forge (`forge.<id>.auth`); a token that
+merely cannot reach another owner's repos is not a fault. Fetches, pushes, PRs and the repo's
+visibility all go through its credential; enrolling and discovery, before a repo has one, ask as
+each credential in turn (`asAnyCredential`).
 
 **No write access blocks fixing on that repo** (`writeAccess`): no proposal is drafted, validated or
 delivered there, so nothing is authored only to fail at the push. Rounds and `report` delivery go
 on; the Repo page says why and disables Fix, Armed, Auto-submit and the fixing delivery modes.
-A forge with no token reads anonymously, so every repo on it is blocked this way.
+A forge with no credential (or no token) reads anonymously, so every repo on it is blocked this way.
 
-Commits are authored by `identity.name` and `identity.email`; with the email empty (or the old
-default `lamplighter@localhost`), a GitHub forge's token account is used, by its noreply address.
+Commits are authored by the repo's credential's `commit_name`/`commit_email` when set, else by
+`identity.name` and `identity.email`; with no email anywhere (or the old default
+`lamplighter@localhost`), a GitHub credential's account is used, by its noreply address.
 
 ## 5. Running it
 
@@ -147,7 +165,7 @@ docker exec lamplighter-dev seed-fixtures /DATA/fixtures
   ```
 
   Then seed `acme-web` there with `GITEA_URL=http://gitea:3000 GITEA_USER=… GITEA_TOKEN=… seed-fixtures /DATA/fixtures`.
-  In Lamplighter, add a `gitea` forge with base URL `http://gitea:3000`, username and token.
+  In Lamplighter, add a `gitea` forge with base URL `http://gitea:3000`, then a credential on it with that username and token.
 - **Fixture forge**: add a `git` forge with base `/DATA/fixtures`, then repos `acme-api` and
   `tiny-cli`. They carry a stale README, an unused file, vulnerable lodash/minimist/express
   versions, an `eval()` on request input and a swallowed error.

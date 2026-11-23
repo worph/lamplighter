@@ -1,6 +1,7 @@
 import type { Db } from '../db/index.js'
 import { now } from '../db/index.js'
 import { forgeApi, forgeRow } from '../forges/index.js'
+import { asAnyCredential } from '../forges/auth.js'
 
 export interface RepoRow {
   key: string
@@ -13,6 +14,8 @@ export interface RepoRow {
   visibility: 'public' | 'private'
   policy: string
   settings_json: string
+  /** Pinned credential; null lets the group's pin, then auto, choose. */
+  credential_id: string | null
   last_fetch_at: string | null
   last_head: string | null
   fetch_error: string | null
@@ -24,6 +27,8 @@ export interface GroupRow {
   name: string
   policy: string
   settings_json: string
+  /** Pinned credential for the group's repos on that credential's forge. */
+  credential_id: string | null
 }
 
 /** `<forge>~<owner>/<name>`. `~` survives encodeURIComponent, so a key is one URL segment. */
@@ -78,7 +83,8 @@ export async function addRepo(db: Db, input: AddRepoInput): Promise<RepoRow> {
   let visibility = input.visibility
   let remote = input.remote_url
   if (forge.kind !== 'git') {
-    const info = await api.repoInfo(owner, input.name)
+    // Not enrolled yet, so no credential is chosen: ask as whichever one can see it.
+    const info = await asAnyCredential(db, forge.id, (a) => a.repoInfo(owner, input.name))
     line ??= info.defaultBranch
     visibility ??= info.visibility
     remote ??= api.cloneUrl(owner, input.name)
