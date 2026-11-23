@@ -14,6 +14,11 @@ export interface DetectorResult {
 
 type Fetch = typeof fetch
 
+/** Time allowed for one OSV vulnerability lookup or one npm registry lookup. */
+const FETCH_TIMEOUT_MS = 15_000
+/** Vulnerability details fetched per package; any others are only counted in the title. */
+const MAX_VULN_DETAILS = 5
+
 interface LockPackage {
   version?: string
   dev?: boolean
@@ -71,9 +76,9 @@ export async function osv(worktree: string, fetchImpl: Fetch = fetch): Promise<D
       const [id] = batch[j]!
       // Details for the headline; at most a few lookups per package.
       const details = await Promise.all(
-        vulns.slice(0, 5).map(async (v) => {
+        vulns.slice(0, MAX_VULN_DETAILS).map(async (v) => {
           try {
-            const r = await fetchImpl(`https://api.osv.dev/v1/vulns/${v.id}`, { signal: AbortSignal.timeout(15_000) })
+            const r = await fetchImpl(`https://api.osv.dev/v1/vulns/${v.id}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
             return (await r.json()) as { id: string; summary?: string; aliases?: string[]; database_specific?: { severity?: string } }
           } catch {
             return { id: v.id }
@@ -113,7 +118,7 @@ export async function npmOutdated(worktree: string, fetchImpl: Fetch = fetch): P
   await Promise.all(
     names.map(async (name) => {
       try {
-        const r = await fetchImpl(`https://registry.npmjs.org/${name.replace('/', '%2F')}/latest`, { signal: AbortSignal.timeout(15_000) })
+        const r = await fetchImpl(`https://registry.npmjs.org/${name.replace('/', '%2F')}/latest`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
         if (!r.ok) return
         const latest = ((await r.json()) as { version: string }).version
         const d = drift(deps[name]!, latest)

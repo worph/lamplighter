@@ -273,7 +273,7 @@ describe('mirrors', () => {
     db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, created_at) VALUES ('f~r','f','default','','r',?,'main','now')").run(origin)
     const repo = db.prepare("SELECT * FROM repos WHERE key = 'f~r'").get() as import('./repos/registry.js').RepoRow
     const m = new Mirrors(db, data)
-    await m.fetch(repo) // the mirror exists, so the next fetches all take the set-url path
+    await m.fetch(repo) // the mirror already exists, so the next fetches take the existing-clone branch (get-url check only)
     // Checks start together, as a "run every check" does: each fetches, then checks out.
     const runs = await Promise.all(Array.from({ length: 4 }, async (_, i) => {
       const sha = await m.fetch(repo)

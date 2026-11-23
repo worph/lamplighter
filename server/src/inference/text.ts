@@ -39,6 +39,12 @@ const RESULT_CHARS = 20_000
 const CALLS_PER_TURN = 8
 /** The most a claude-code-container request may run (its own cap). */
 const MAX_REQUEST_S = 3600
+/** The least a standalone request is given, however small the caller's budget. */
+const MIN_REQUEST_S = 30
+/** Transport slack on top of a standalone request's own timeout. */
+const HTTP_SLACK_S = 60
+/** How long the probe's one-word request may take. */
+const PROBE_TIMEOUT_S = 90
 
 /** Claude Code's own tools: the model works only through the tools Lamplighter describes. */
 const BACKEND_TOOLS = ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Read', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite']
@@ -112,8 +118,8 @@ export function createTextDriver(opts: TextOptions): Driver {
    * short transport grace; standalone requests (complete/probe) keep the floor and a 60s grace.
    */
   async function call(messages: Message[], timeoutMs: number, inSession = false): Promise<{ text: string; c: Completion }> {
-    const floorS = inSession ? 1 : 30
-    const graceS = inSession ? 5 : 60
+    const floorS = inSession ? 1 : MIN_REQUEST_S
+    const graceS = inSession ? 5 : HTTP_SLACK_S
     const timeout = Math.max(floorS, Math.min(MAX_REQUEST_S, Math.floor(timeoutMs / 1000)))
     let res: { status: number; text: string }
     try {
@@ -197,7 +203,7 @@ export function createTextDriver(opts: TextOptions): Driver {
     },
     async probe() {
       try {
-        const r = await this.complete({ prompt: 'Reply with the single word: ok', timeoutS: 90 })
+        const r = await this.complete({ prompt: 'Reply with the single word: ok', timeoutS: PROBE_TIMEOUT_S })
         return { ok: true, detail: `answered: ${r.text.slice(0, 40)}` }
       } catch (err) {
         return { ok: false, detail: (err as Error).message }

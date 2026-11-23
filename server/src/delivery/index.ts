@@ -88,6 +88,7 @@ async function visibility(app: App, repo: RepoRow): Promise<RepoRow['visibility'
     if (info.visibility !== repo.visibility) app.db.prepare('UPDATE repos SET visibility = ? WHERE key = ?').run(info.visibility, repo.key)
     return info.visibility
   } catch {
+    /* forge unreachable: keep the last known visibility */
     return repo.visibility
   }
 }
