@@ -4,7 +4,7 @@ import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
 import { lastDismissal, reconcile, type FindingRow } from '../findings/index.js'
-import { forgeApi, forgeRow } from '../forges/index.js'
+import { forgeRow } from '../forges/index.js'
 import { commitIdentity, writeAccess } from '../forges/auth.js'
 import { git } from '../forges/gitcli.js'
 import { ownBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
@@ -337,5 +337,3 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
     await app.mirrors.removeWorktree(repo, worktree)
   }
 }
-
-export { forgeApi }

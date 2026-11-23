@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { checkSettingsSchema, identitySchema, inferenceSchema, scheduleSchema } from '../config/index.js'
 import type { App } from '../context.js'
-import { newId, now } from '../db/index.js'
+import { now } from '../db/index.js'
 import { listEvents, logEvent } from '../events.js'
 import { dismiss, lastDismissal, listFindings, reopen } from '../findings/index.js'
 import { credentialRow, forgeApi, forgeRow, listCredentials, listForges } from '../forges/index.js'
@@ -392,5 +392,3 @@ export function registerApi(f: FastifyInstance, app: App): void {
 function listCredentialsView(app: App, forgeId: string) {
   return listCredentials(app.db, forgeId).map(credentialView).map((c) => ({ id: c.id, label: c.label, is_default: c.is_default, login: c.auth.login }))
 }
-
-export { newId }

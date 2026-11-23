@@ -11,7 +11,7 @@ interface GhRepo {
   archived?: boolean
 }
 
-export const LABEL = 'lamplighter'
+const LABEL = 'lamplighter'
 
 /** GitHub over REST with a fine-grained token. Mirrors Touchstone's GitHubClient shape. */
 export class GitHubForge implements ForgeApi {
