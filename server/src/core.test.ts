@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -54,14 +54,27 @@ describe('own branches', () => {
 })
 
 describe('workspace paths', () => {
-  const wt = '/work/s1'
+  // A real directory: the check resolves symlinks, so the worktree has to exist, as a session's does.
+  const wt = tmp()
   it('stay inside the worktree', () => {
-    expect(checkRel(wt, 'src/a.ts')).toBe('/work/s1/src/a.ts')
-    expect(checkRel(wt, './README.md')).toBe('/work/s1/README.md')
+    expect(checkRel(wt, 'src/a.ts')).toBe(join(wt, 'src/a.ts'))
+    expect(checkRel(wt, './README.md')).toBe(join(wt, 'README.md'))
     expect(() => checkRel(wt, '../s2/a')).toThrow()
     expect(() => checkRel(wt, '/etc/passwd')).toThrow()
     expect(() => checkRel(wt, '.git/config')).toThrow()
     expect(() => checkRel(wt, 'src/../../x')).toThrow()
+  })
+  it('refuse a symlink that leads out of it', () => {
+    const outside = tmp()
+    writeFileSync(join(outside, 'secret'), 'x')
+    symlinkSync(outside, join(wt, 'out'))
+    symlinkSync(join(outside, 'secret'), join(wt, 'leak'))
+    mkdirSync(join(wt, 'docs'), { recursive: true })
+    symlinkSync(join(wt, 'docs'), join(wt, 'inside'))
+    expect(() => checkRel(wt, 'out/secret')).toThrow(/escapes/)
+    expect(() => checkRel(wt, 'leak')).toThrow(/escapes/)
+    expect(() => checkRel(wt, 'out/new-file')).toThrow(/escapes/) // a write through the link, too
+    expect(checkRel(wt, 'inside/a.md')).toBe(join(wt, 'inside/a.md')) // a link that stays inside is fine
   })
 })
 
