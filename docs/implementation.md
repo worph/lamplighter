@@ -108,7 +108,7 @@ Apps/Lamplighter/     store listing for a Yundera box: backend + beaconify + App
 | `LAMPLIGHTER_INFERENCE_BEARER` | (db, write-only) | bearer for the endpoint; Beacon needs none |
 | `LAMPLIGHTER_PUBLIC_URL` | `public_url` | how the **backend** reaches Lamplighter's workspace endpoint |
 | `LAMPLIGHTER_ADMIN_MCP_TOKEN` | (db) | admin MCP bearer, shared with the beaconify sidecar |
-| `LAMPLIGHTER_DATA_DIR`, `_PORT`, `_HOST`, `_LOG_LEVEL` | — | runtime |
+| `LAMPLIGHTER_DATA_DIR`, `_SEED_DIR`, `_PORT`, `_HOST`, `_LOG_LEVEL` | — | runtime (`_SEED_DIR` is where `seed/checks` and `seed/policy` are read from) |
 
 A forge holds several **credentials** (table `credentials`): one per account Lamplighter speaks as
 there — you, an organisation's token, a bot. A fine-grained GitHub token reaches one resource
@@ -186,14 +186,16 @@ and a generated fallback password. It opens no path: the store's `appshield-wiri
 `ALLOWED_PATHS` for machine paths, so webhooks do not arrive there and polling (`poll_min`) is how
 a box notices pushes. The official ClaudeCode listing ships with MCP **off**, so the preset
 `query_claude` through Beacon works only on a box that enables it (yunderalabs does); elsewhere,
-point Settings → Inference at an OpenAI-compatible API with function calling.
+point Settings → Inference at an OpenAI-compatible API with function calling (driver `openai`), or,
+for an endpoint without function calling such as the claude-code container's OpenAI API, use the
+`text` driver.
 
 Releases: tag, build and push `ghcr.io/worph/lamplighter:<v>`, then bump the image in
 `Apps/Lamplighter/docker-compose.yml`.
 
 ## 6. Verification done for v1
 
-- `npm run typecheck` is clean, and `npm test` passes all 17 tests. They cover:
+- `npm run typecheck` is clean, and `npm test` passes all 25 tests. They cover:
   - fingerprint stability;
   - the `OwnBranch` brand, and a grep test that `repos/push.ts` cannot force;
   - workspace path escapes;

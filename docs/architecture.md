@@ -85,7 +85,7 @@ These are the rules the design is built around. Code that breaks one is a bug ev
 lamplighter (backend, one Node process)
 ├── forges/        GitHub · Gitea · git adapters behind one ForgeClient interface
 ├── registry/      repos, groups, inherited settings; forge discovery (list an org)
-├── mirror/        bare mirror clones on /work/mirrors, worktrees on /work/trees
+├── mirror/        bare mirror clones on /DATA/repos, worktrees on /DATA/work
 ├── triggers/      webhook receivers (GitHub, Gitea), poller (ls-remote for bare git), cron
 ├── scheduler/     the queue, tiers, budget, slots, debounce
 ├── rounds/        detector runs + the agent call for a round; report writer
@@ -195,7 +195,7 @@ open ─────┼──────── person dismisses (reason) ──
 
 ### 6.3 Reports
 
-Each round also writes a markdown report (`data/rounds/<repo>/<check>/<round-id>.md`) for a person
+Each round also stores a markdown report on its round row (the `report` column) for a person
 to read. The database stores findings as rows; the report is the narrative around them. When a
 check's delivery is `report`, the report is what the maintainer gets: an Activity item for each
 round that surfaced new or reopened findings, and for every full LLM review. A newer one
@@ -215,7 +215,7 @@ drafting → validating → ready → (awaiting approval) → submitted → land
 ### 7.2 Authoring
 
 1. The backend creates a worktree from the mirror at the round's commit:
-   `/work/trees/<proposal-id>`, on a local branch `lamplighter/<kind>/<slug>-<yyyymmdd>-<id6>`.
+   `/DATA/work/<proposal-id>`, on a local branch `lamplighter/<kind>/<slug>-<yyyymmdd>-<id6>`.
 2. One agent session (`query_claude`, `workdir` = the worktree, `sessionId` = the proposal id) gets
    the findings, the check's prompt, the policy, the repo's `CLAUDE.md`/`LAMPLIGHTER.md`, and the
    commands it may run. It edits files and may run the repo's build/tests to iterate. It
@@ -256,8 +256,8 @@ anything else (security).
 
 | Source | How | Produces |
 |---|---|---|
-| GitHub | org/repo webhook `push` on the line → `POST /hooks/github` (HMAC verified) | `diff` rounds of every check with `diff` in its scopes |
-| Gitea | org/repo webhook `push` → `POST /hooks/gitea` | same |
+| GitHub | org/repo webhook `push` on the line → `POST /hooks/github/<forge>` (HMAC verified) | `diff` rounds of every check with `diff` in its scopes |
+| Gitea | org/repo webhook `push` → `POST /hooks/gitea/<forge>` | same |
 
 **Behind AppShield (the store listing) webhooks cannot arrive:** the store opens no machine path
 through the gate (`appshield-wiring`), so a Yundera box relies on polling. The receivers stay for
@@ -360,7 +360,7 @@ repository reaches the model only through the **workspace toolset** of one sessi
 
 Paths are resolved inside the worktree and `.git` is refused (Touchstone's `checkRel`).
 
-**Two drivers** (`inference/`), one interface:
+**Three drivers** (`inference/`), one interface:
 
 - **`claude-code`**: `query_claude` over MCP, `via: beacon` (wrapped in the aggregator's `call`
   tool, with `__beacon_timeout`) or `direct`. The backend is agentic and has a shell, so the prompt
@@ -418,7 +418,7 @@ push, revert, delete branch), each requiring a typed confirmation.
 
 ### 11.3 Admin MCP
 
-`/api/v1/mcp/admin`, bearer-protected, announced by the `beaconify` sidecar. Proposed tools:
+`/mcp/admin`, bearer-protected, announced by the `beaconify` sidecar. Proposed tools:
 
 | Tool | Kind |
 |---|---|
