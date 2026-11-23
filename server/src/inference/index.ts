@@ -3,6 +3,7 @@ import type { Db } from '../db/index.js'
 import { SETTING, getSetting } from '../settings.js'
 import { createClaudeCodeDriver } from './claude-code.js'
 import { createOpenAiDriver } from './openai.js'
+import { createTextDriver } from './text.js'
 import type { Driver } from './types.js'
 
 /** Built per use from the live config, so a Settings change applies to the next session. */
@@ -11,6 +12,9 @@ export function driverFor(config: Config, db: Db): Driver {
   const bearer = getSetting(db, SETTING.inferenceBearer) || undefined
   if (inf.driver === 'openai') {
     return createOpenAiDriver({ url: inf.url, model: inf.model, bearer, maxRounds: inf.max_tool_rounds })
+  }
+  if (inf.driver === 'text') {
+    return createTextDriver({ url: inf.url, model: inf.model, bearer, maxRounds: inf.max_tool_rounds })
   }
   return createClaudeCodeDriver({ url: inf.url, tool: inf.tool, via: inf.via, bearer, workdir: inf.workdir || undefined })
 }

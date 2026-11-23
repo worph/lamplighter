@@ -9,6 +9,7 @@ import { checkRel } from './tools/workspace.js'
 import { drift, lockPackages } from './checks/detectors/index.js'
 import { classify, lastMessage, createClaudeCodeDriver } from './inference/claude-code.js'
 import { createOpenAiDriver, completionsUrl } from './inference/openai.js'
+import { createTextDriver, parseToolCalls } from './inference/text.js'
 import { extractJson } from './inference/index.js'
 import { resolveSettings, type CheckDef } from './checks/index.js'
 import { configSchema } from './config/index.js'
@@ -130,6 +131,50 @@ describe('openai driver', () => {
     expect(calls).toEqual(['read_file', 'finish'])
     expect(r.usage.tokens_in).toBe(10)
     expect(completionsUrl('http://x/v1/')).toBe('http://x/v1/chat/completions')
+  })
+})
+
+describe('text driver', () => {
+  it('reads tool calls from a fenced block, runs them in order, and sends the results back', async () => {
+    const calls: string[] = []
+    const sent: { messages: { role: string; content: string }[]; permission_mode?: string; disallowed_tools?: string[]; tools?: unknown }[] = []
+    let done = false
+    const answers = [
+      'Let me look.\n```tool\n[{"tool": "read_file", "args": {"path": "README.md"}}, {"tool": "grep", "args": {"pattern": "x"}}]\n```',
+      '```tool\n{not json}\n```',
+      'Done.\n```tool\n{"tool": "finish", "args": {"summary": "ok"}}\n```',
+    ]
+    const d = createTextDriver({
+      url: 'http://x/v1', model: 'sonnet', maxRounds: 10,
+      fetchImpl: async (url, body) => {
+        expect(url).toBe('http://x/v1/chat/completions')
+        sent.push(JSON.parse(JSON.stringify(body)))
+        return { status: 200, text: JSON.stringify({ choices: [{ message: { role: 'assistant', content: answers[sent.length - 1] } }], usage: { prompt_tokens: 5, completion_tokens: 1 } }) }
+      },
+    })
+    const r = await d.runSession({
+      sessionId: 's', prompt: 'p', timeoutS: 30, callback: { url: '', token: '' },
+      tools: ['read_file', 'grep', 'finish'].map((name) => ({ name, description: '', parameters: {} })),
+      exec: async (name) => { calls.push(name); if (name === 'finish') done = true; return `${name} out` },
+      isDone: () => done,
+    })
+    expect(calls).toEqual(['read_file', 'grep', 'finish'])
+    expect(r.usage.tokens_in).toBe(15)
+    // The tools travel in the prompt, never as function definitions.
+    expect(sent[0]!.tools).toBeUndefined()
+    expect(sent[0]!.messages[0]).toMatchObject({ role: 'system', content: expect.stringContaining('`read_file`') })
+    expect(sent[1]!.messages.at(-1)!.content).toMatch(/<result n="1" tool="read_file">\nread_file out[\s\S]*<result n="2" tool="grep">/)
+    // A broken block is answered, not fatal.
+    expect(sent[2]!.messages.at(-1)!.content).toMatch(/not valid JSON/)
+    // Every request narrows Claude Code: no permission bypass, none of its own tools.
+    expect(sent.every((b) => b.permission_mode === 'default' && b.disallowed_tools!.includes('Bash'))).toBe(true)
+  })
+
+  it('parses the last block, single calls, and nothing', () => {
+    expect(parseToolCalls('no block')).toBeUndefined()
+    expect(parseToolCalls('```tool\n{"tool":"a","args":{"k":1}}\n```')).toEqual([{ tool: 'a', args: { k: 1 } }])
+    expect(parseToolCalls('```json\n[{"tool":"a"}]\n```\nthen\n```tool\n[{"name":"b","arguments":{}}]\n```')).toEqual([{ tool: 'b', args: {} }])
+    expect(parseToolCalls('```tool\n[{"args":{}}]\n```')).toEqual({ error: expect.stringMatching(/tool/) })
   })
 })
 

@@ -13,7 +13,7 @@ services:
   # shared network because it calls the box's Beacon (and through it the shared claude-code
   # container), and because that agent calls back into its workspace endpoint.
   lamplighter-backend:
-    image: ghcr.io/worph/lamplighter:0.5.0
+    image: ghcr.io/worph/lamplighter:0.6.0
     container_name: lamplighter-backend
     hostname: lamplighter-backend
     restart: unless-stopped
@@ -25,7 +25,9 @@ services:
       LAMPLIGHTER_DATA_DIR: /DATA
       LAMPLIGHTER_PORT: "8080"
       # Seeds config.yaml on first boot only; Settings → Inference changes it afterwards.
-      # Any OpenAI-compatible endpoint works too (driver `openai`, a base URL and a model).
+      # Any OpenAI-compatible endpoint works too (driver `openai`, a base URL and a model), and one
+      # with no function calling — Claude Code's own OpenAI API (`http://claude-router:9091/v1`,
+      # its password as the bearer) — with driver `text`.
       LAMPLIGHTER_INFERENCE_DRIVER: claude-code
       LAMPLIGHTER_INFERENCE_URL: http://beacon-backend:9300/mcp
       LAMPLIGHTER_INFERENCE_TOOL: claude-code__query_claude
@@ -137,7 +139,7 @@ x-compose-app:
       change:
         apply: env
   id: lamplighter
-  version: "0.5.0"
+  version: "0.6.0"
   routes:
     - { service: lamplighter, name: lamplighter, upstream-port: 80 }
   title:
@@ -151,7 +153,7 @@ x-compose-app:
       Nine checks: documentation drift, known CVEs, outdated dependencies, dead code, refactoring, code quality, bad patterns, architecture and security. Findings are remembered — a dismissal sticks until the code it is about changes. Fixes are written by an LLM, validated by a second, independent session, and delivered per check as a report, a branch, a pull request or a push, with you approving each one in the Activity page.
 
       - GitHub, Gitea and plain git remotes; forge tokens stay in Lamplighter, never in a prompt
-      - Any inference backend: Claude Code over MCP through Beacon, or any OpenAI-compatible API with function calling
+      - Any inference backend: Claude Code over MCP through Beacon or its OpenAI API, or any OpenAI-compatible API
       - An administrator chat, and an admin MCP so other assistants can read the fleet and request rounds
   developer: Worph
   category: Developer
@@ -165,7 +167,7 @@ x-compose-app:
   audience: technical
   tips:
     en_us: |
-      The CVE and dependency checks work at once. The LLM checks need a backend in **Settings → Inference**, then **Test**: preset is Claude Code's `query_claude` through this box's **Beacon** (the Claude Code listing ships with MCP off — enable it on boxes that should serve it), or any OpenAI-compatible API with function calling (OpenAI, OpenRouter, Ollama…).
+      The CVE and dependency checks work at once. The LLM checks need a backend in **Settings → Inference**, then **Test**: preset is Claude Code's `query_claude` through this box's **Beacon** (the Claude Code listing ships with MCP off — enable it on boxes that should serve it), Claude Code's own OpenAI API with driver **text** (`http://claude-router:9091/v1`, model `sonnet`, its password as the bearer — no MCP needed), or any OpenAI-compatible API with function calling (OpenAI, OpenRouter, Ollama…).
 
       1. **Settings → Forges**: add GitHub or Gitea with a fine-grained token (contents and pull requests: read and write), or a plain git remote prefix.
       2. **Repos → Add repositories**: enrol a few, then press **Round** on a check.
@@ -207,12 +209,12 @@ x-casaos:
       Nine checks: documentation drift, known CVEs, outdated dependencies, dead code, refactoring, code quality, bad patterns, architecture and security. Findings are remembered — a dismissal sticks until the code it is about changes. Fixes are written by an LLM, validated by a second, independent session, and delivered per check as a report, a branch, a pull request or a push, with you approving each one in the Activity page.
 
       - GitHub, Gitea and plain git remotes; forge tokens stay in Lamplighter, never in a prompt
-      - Any inference backend: Claude Code over MCP through Beacon, or any OpenAI-compatible API with function calling
+      - Any inference backend: Claude Code over MCP through Beacon or its OpenAI API, or any OpenAI-compatible API
       - An administrator chat, and an admin MCP so other assistants can read the fleet and request rounds
   tips:
     before_install:
       en_us: |
-        The CVE and dependency checks work at once. The LLM checks need a backend in **Settings → Inference**, then **Test**: preset is Claude Code's `query_claude` through this box's **Beacon** (the Claude Code listing ships with MCP off — enable it on boxes that should serve it), or any OpenAI-compatible API with function calling (OpenAI, OpenRouter, Ollama…).
+        The CVE and dependency checks work at once. The LLM checks need a backend in **Settings → Inference**, then **Test**: preset is Claude Code's `query_claude` through this box's **Beacon** (the Claude Code listing ships with MCP off — enable it on boxes that should serve it), Claude Code's own OpenAI API with driver **text** (`http://claude-router:9091/v1`, model `sonnet`, its password as the bearer — no MCP needed), or any OpenAI-compatible API with function calling (OpenAI, OpenRouter, Ollama…).
 
         1. **Settings → Forges**: add GitHub or Gitea with a fine-grained token (contents and pull requests: read and write), or a plain git remote prefix.
         2. **Repos → Add repositories**: enrol a few, then press **Round** on a check.

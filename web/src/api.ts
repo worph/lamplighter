@@ -231,7 +231,7 @@ export interface CredentialAuth {
 export interface SettingsView {
   config: {
     public_url: string
-    inference: { driver: 'claude-code' | 'openai'; url: string; tool: string; via: 'beacon' | 'direct'; model: string; workdir: string; timeout_s: number; max_tool_rounds: number }
+    inference: { driver: 'claude-code' | 'openai' | 'text'; url: string; tool: string; via: 'beacon' | 'direct'; model: string; workdir: string; timeout_s: number; max_tool_rounds: number }
     identity: { name: string; email: string }
     schedule: { enabled: boolean; rotation: boolean; tick_s: number; poll_min: number; debounce_min: number; slots: number; sessions_per_day: number; deliveries_per_day: number; open_items_per_repo: number }
     checks: Record<string, Partial<CheckSettings>>

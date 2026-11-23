@@ -12,7 +12,7 @@ describes, the section says so in a **v1:** note; everything else is how the cod
 | D1 | Forges | **GitHub, Gitea, and bare git.** Bare git is branch-or-push only: there is no PR. |
 | D2 | Executor | **A shared inference endpoint, configured like the siblings** (Settings → Inference; seeded from env). On yunderalabs it is the same claude-code container Touchstone uses, through the box's Beacon. Lamplighter is standalone and talks to no other app. *Revised 2026-11-19:* an own worker sidecar on a shared clone volume was the first answer. |
 | D2a | Code access | **Lamplighter clones and keeps every repo in its own state folder.** The model never gets a clone: it works through a **session-scoped workspace toolset** Lamplighter exposes (§10), Touchstone's workshop model. |
-| D2b | Inference coupling | **Pluggable, nothing claude-code-specific above the driver.** Two drivers: `claude-code` (MCP `query_claude`, agentic, reaches the workspace over HTTP) and `openai` (any OpenAI-compatible `/chat/completions` with function calling; Lamplighter runs the tool loop). |
+| D2b | Inference coupling | **Pluggable, nothing claude-code-specific above the driver.** Three drivers: `claude-code` (MCP `query_claude`, agentic, reaches the workspace over HTTP), `openai` (any OpenAI-compatible `/chat/completions` with function calling; Lamplighter runs the tool loop) and `text` (the same loop over an endpoint with no function calling, such as Claude Code's OpenAI API; the tools travel in the prompt). |
 | D3 | Scale | Designed for **~200 repositories**: personal ones plus the Yundera and NSL.sh orgs. |
 | D4 | Visibility | **Both public and private.** Visibility is a first-class repo property, read from the forge, and it changes what delivery is allowed (§9). |
 | D5 | First tenants | Not decided. Onboarding is M8; nothing in the design depends on which repos come first. |
@@ -371,6 +371,14 @@ Paths are resolved inside the worktree and `.git` is refused (Touchstone's `chec
 - **`openai`**: any OpenAI-compatible `/chat/completions` with function calling. Lamplighter
   offers the tools as functions, executes each call in-process, and loops until `finish`, an
   answer with no tool call (one nudge), the round cap or the clock.
+- **`text`**: the `openai` loop for an endpoint that is text in, text out — first of all
+  claude-code-container's OpenAI API, used where its MCP endpoint is off. The tools are described
+  in a system message; the model ends each answer with a fenced `tool` block (a JSON array of up
+  to eight calls), and Lamplighter answers with `<result>` elements. The backend needs no route
+  back to Lamplighter. Each request also narrows Claude Code through that API's own body fields
+  (`permission_mode: default`, its own tools disallowed), so repository content cannot steer it
+  into a shell or the box's other MCP servers. Every turn is a fresh `claude -p`: slower per turn
+  than the agentic driver, and the transcript is resent each time.
 
 **Failures are the backend's, not the repo's** (invariant 6): unreachable, refused credentials,
 a dead login (claude-code answers "Failed to authenticate…" as ordinary text, which the driver

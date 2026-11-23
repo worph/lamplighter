@@ -37,6 +37,7 @@ and points them at code:
                     │ any LLM backend, shared:             │
                     │  claude-code  — MCP query_claude     │
                     │  openai       — /chat/completions    │
+                    │  text         — same, no functions   │
                     └──────────────────────────────────────┘
 ```
 
@@ -157,5 +158,5 @@ points at the box's Beacon and claude-code out of the box. Details in
 
 | | Contents |
 |---|---|
-| **v1** ✅ | GitHub / Gitea / bare git, bare clones, polling + webhooks + loop guard; nine check files; OSV and npm detectors; LLM review, fix and independent validation sessions through a workspace toolset; claude-code and OpenAI-compatible drivers; findings with dedup and dismissal memory; delivery report / branch / PR / push with approve, reject, merge, revert and PR follow-up; scheduler with tiers, debounce, slots, session budget and attention caps; Chat, Repos, Activity, Settings; admin MCP |
+| **v1** ✅ | GitHub / Gitea / bare git, bare clones, polling + webhooks + loop guard; nine check files; OSV and npm detectors; LLM review, fix and independent validation sessions through a workspace toolset; claude-code, OpenAI-compatible and text-only drivers; findings with dedup and dismissal memory; delivery report / branch / PR / push with approve, reject, merge, revert and PR follow-up; scheduler with tiers, debounce, slots, session budget and attention caps; Chat, Repos, Activity, Settings; admin MCP |
 | **next** | a credential-free runner (tests, package managers, scanners) → mechanical validation and lockfile regeneration for `cve`/`deps` fixes; GitHub private advisories; batching of cleanup PRs; web push; policy-from-overrides review; onboarding the ~200-repo fleet in waves |

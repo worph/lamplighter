@@ -52,15 +52,17 @@ function Inference({ s }: { s: SettingsView }) {
       <p className="text-xs text-stone-500 mb-3">
         The model behind every round, fix and chat turn. <b>claude-code</b> calls an agentic backend’s <code>query_claude</code> over MCP (directly or through a Beacon); the agent reaches the
         repository through Lamplighter’s workspace endpoint at the public URL. <b>openai</b> is any OpenAI-compatible <code>/chat/completions</code> with function calling; Lamplighter runs the tool loop itself.
+        <b>text</b> is the same loop for an endpoint with no function calling, such as Claude Code’s OpenAI API: the tools are described in the prompt and the backend needs no route back to Lamplighter.
       </p>
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Driver">
           <select className={inputCls} value={f.driver} onChange={(e) => setF({ ...f, driver: e.target.value as typeof f.driver })}>
             <option value="claude-code">claude-code (MCP query_claude)</option>
             <option value="openai">openai-compatible (function calling)</option>
+            <option value="text">openai-compatible, text only (e.g. Claude Code’s API)</option>
           </select>
         </Field>
-        <Field label={f.driver === 'openai' ? 'Base URL (…/v1)' : 'MCP endpoint URL'} hint={f.driver === 'openai' ? 'e.g. https://openrouter.ai/api/v1' : 'e.g. http://beacon-backend:9300/mcp'}>
+        <Field label={f.driver === 'claude-code' ? 'MCP endpoint URL' : 'Base URL (…/v1)'} hint={f.driver === 'openai' ? 'e.g. https://openrouter.ai/api/v1' : f.driver === 'text' ? 'e.g. http://claude-router:9091/v1' : 'e.g. http://beacon-backend:9300/mcp'}>
           <input className={inputCls} value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} />
         </Field>
         {f.driver === 'claude-code' ? (
@@ -76,7 +78,7 @@ function Inference({ s }: { s: SettingsView }) {
           </>
         ) : (
           <>
-            <Field label="Model"><input className={inputCls} value={f.model} onChange={(e) => setF({ ...f, model: e.target.value })} placeholder="e.g. anthropic/claude-sonnet-5.5" /></Field>
+            <Field label="Model"><input className={inputCls} value={f.model} onChange={(e) => setF({ ...f, model: e.target.value })} placeholder={f.driver === 'text' ? 'e.g. sonnet (empty: the backend’s default)' : 'e.g. anthropic/claude-sonnet-5.5'} /></Field>
             <Field label="Max tool rounds"><input type="number" className={inputCls} value={f.max_tool_rounds} onChange={(e) => setF({ ...f, max_tool_rounds: Number(e.target.value) })} /></Field>
           </>
         )}

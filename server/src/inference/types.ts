@@ -3,8 +3,10 @@
  *
  * - `agentic` drivers (claude-code) run their own tool loop: the session's tools are described in
  *   the prompt as an HTTP endpoint on Lamplighter, and the agent calls them itself.
- * - `tool-calling` drivers (any OpenAI-compatible API with function calling) are handed the tool
- *   schemas, and Lamplighter runs the loop, executing each call in-process.
+ * - `tool-calling` drivers are handed the tool schemas, and Lamplighter runs the loop, executing
+ *   each call in-process: through function calling (`openai`), or described in the prompt and
+ *   answered in a fenced block (`text`, for endpoints with no function calling, such as
+ *   Claude Code's OpenAI API).
  *
  * Either way the same tools run against the same worktree, and a session ends when the model calls
  * `finish` or `cannot` (or stops answering).

@@ -39,7 +39,7 @@ server/src/
   checks/detectors/   osv (package-lock.json → api.osv.dev), npm-outdated (registry latest)
   forges/             gitcli, refs (OwnBranch brand, trailers), github, gitea, git, http
   repos/              registry, mirror (bare clone, fetch, worktrees, loop guard), push (the only ref writes)
-  inference/          types, claude-code (MCP query_claude), openai (tool loop), driverFor, extractJson
+  inference/          types, claude-code (MCP query_claude), openai (tool loop), text (tool loop without function calling), driverFor, extractJson
   tools/              workspace (the session toolset), admin (the MCP + chat registry)
   sessions/           session registry, prompts, engine (round, author, validate)
   findings/           fingerprint, input hash, reconcile, dismiss/reopen
@@ -100,11 +100,11 @@ Apps/Lamplighter/     store listing for a Yundera box: backend + beaconify + App
 
 | Env (first boot only) | Key | Meaning |
 |---|---|---|
-| `LAMPLIGHTER_INFERENCE_DRIVER` | `inference.driver` | `claude-code` or `openai` |
+| `LAMPLIGHTER_INFERENCE_DRIVER` | `inference.driver` | `claude-code`, `openai` or `text` |
 | `LAMPLIGHTER_INFERENCE_URL` | `inference.url` | MCP endpoint (Beacon or the container) / OpenAI base URL |
 | `LAMPLIGHTER_INFERENCE_TOOL` | `inference.tool` | `claude-code__query_claude` behind Beacon, `query_claude` direct |
 | `LAMPLIGHTER_INFERENCE_VIA` | `inference.via` | `beacon` or `direct` |
-| `LAMPLIGHTER_INFERENCE_MODEL` | `inference.model` | openai only |
+| `LAMPLIGHTER_INFERENCE_MODEL` | `inference.model` | openai and text only |
 | `LAMPLIGHTER_INFERENCE_BEARER` | (db, write-only) | bearer for the endpoint; Beacon needs none |
 | `LAMPLIGHTER_PUBLIC_URL` | `public_url` | how the **backend** reaches Lamplighter's workspace endpoint |
 | `LAMPLIGHTER_ADMIN_MCP_TOKEN` | (db) | admin MCP bearer, shared with the beaconify sidecar |

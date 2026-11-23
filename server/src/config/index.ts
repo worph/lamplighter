@@ -24,7 +24,7 @@ export const checkSettingsSchema = z
 export type CheckSettings = z.infer<typeof checkSettingsSchema>
 
 export const inferenceSchema = z.object({
-      driver: z.enum(['claude-code', 'openai']).default('claude-code'),
+      driver: z.enum(['claude-code', 'openai', 'text']).default('claude-code'),
       url: z.string().default('http://beacon-backend:9300/mcp'),
       tool: z.string().default('claude-code__query_claude'),
       via: z.enum(['beacon', 'direct']).default('beacon'),
@@ -64,14 +64,14 @@ const TEMPLATE = `# Lamplighter configuration. Read at boot; the Settings page w
 public_url: __PUBLIC_URL__
 
 inference:
-  driver: __DRIVER__         # claude-code (MCP query_claude) | openai (any /chat/completions with tools)
+  driver: __DRIVER__         # claude-code (MCP query_claude) | openai (any /chat/completions with tools) | text (/chat/completions without tools, e.g. Claude Code's API)
   url: __URL__
   tool: __TOOL__             # claude-code only
   via: __VIA__               # claude-code only: beacon (aggregator \`call\` envelope) | direct
-  model: "__MODEL__"         # openai only
+  model: "__MODEL__"         # openai and text only
   workdir: ""                # claude-code only: agent cwd, empty = the backend's default
   timeout_s: 1800            # one session (round or proposal)
-  max_tool_rounds: 80        # openai only: Lamplighter runs the tool loop
+  max_tool_rounds: 80        # openai and text only: Lamplighter runs the tool loop
 
 identity:                    # author of every commit Lamplighter makes
   name: Lamplighter
