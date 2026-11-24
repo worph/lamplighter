@@ -169,7 +169,7 @@ export interface QueueRow {
 export interface Schedule {
   running: QueueRow[]
   queued: QueueRow[]
-  budget: { sessions_today: number; sessions_per_day: number; slots: number }
+  budget: { sessions_this_hour: number; sessions_per_hour: number; slots: number }
   enabled: boolean
   rotation: boolean
 }
@@ -233,7 +233,7 @@ export interface SettingsView {
     public_url: string
     inference: { driver: 'claude-code' | 'openai' | 'text'; url: string; tool: string; via: 'beacon' | 'direct'; model: string; workdir: string; timeout_s: number; max_tool_rounds: number }
     identity: { name: string; email: string }
-    schedule: { enabled: boolean; rotation: boolean; tick_s: number; poll_min: number; debounce_min: number; slots: number; sessions_per_day: number; deliveries_per_day: number; open_items_per_repo: number }
+    schedule: { enabled: boolean; rotation: boolean; tick_s: number; poll_min: number; debounce_min: number; slots: number; sessions_per_hour: number; deliveries_per_hour: number; open_items_per_repo: number }
     checks: Record<string, Partial<CheckSettings>>
   }
   inference_bearer: string | null

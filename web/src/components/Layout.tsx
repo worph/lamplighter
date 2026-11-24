@@ -46,7 +46,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             <>
               <div>{o.repos} repos · {o.open_findings} open findings</div>
               <div>{busy ? `${o.schedule.running.length} running · ${o.schedule.queued.length} queued` : 'idle'}</div>
-              <div>sessions today {o.schedule.budget.sessions_today}/{o.schedule.budget.sessions_per_day}</div>
+              <div>sessions this hour {o.schedule.budget.sessions_this_hour}/{o.schedule.budget.sessions_per_hour}</div>
               <div className="truncate" title={o.inference.url}>{o.inference.driver}</div>
             </>
           )}

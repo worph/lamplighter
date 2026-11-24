@@ -27,6 +27,8 @@ export interface ProposalRow {
   patch: string | null
   validation: string | null
   submitted_ref: string | null
+  /** Ready, auto-submit on, held back only by the hourly delivery cap: the tick retries it. */
+  auto_waiting: number
   error: string | null
   created_at: string
   updated_at: string
@@ -70,8 +72,8 @@ export function failProposal(app: App, id: string, reason: string, opts: { block
   logEvent(app.db, { level: 'warn', code: 'PROPOSAL_FAILED', repo: p.repo_key, message: `${p.check_kind} proposal failed: ${reason.slice(0, 300)}`, detail: { proposal: id } })
 }
 
-export function deliveriesToday(app: App): number {
-  const since = new Date(Date.now() - 24 * 3600_000).toISOString()
+export function deliveriesThisHour(app: App): number {
+  const since = new Date(Date.now() - 3600_000).toISOString()
   return (app.db.prepare("SELECT COUNT(*) AS n FROM events WHERE code = 'DELIVERED' AND at > ?").get(since) as { n: number }).n
 }
 
@@ -112,26 +114,48 @@ export async function afterReady(app: App, id: string): Promise<void> {
   const s = def ? resolveSettings(def, app.config.current, parseSettings(getGroup(app.db, repo.group_id).settings_json), parseSettings(repo.settings_json)) : undefined
   let waiting = ''
   if (s?.auto_submit) {
-    const blocker = deliveryBlocker(app, repo)
-    if (blocker) waiting = ` (auto-submit waiting: ${blocker})`
-    else if (deliveriesToday(app) >= app.config.current.schedule.deliveries_per_day) waiting = ' (auto-submit waiting on the daily delivery cap)'
-    else {
-      try {
-        await deliver(app, id, 'auto')
-        return
-      } catch (err) {
-        // The fix is validated; a failed push says nothing about it. It stays ready for a person.
-        if (mustGet(app, id).state !== 'ready') throw err
-        waiting = ` (auto-submit failed: ${(err as Error).message.slice(0, 300)})`
-        logEvent(app.db, { level: 'warn', code: 'DELIVERY_FAILED', repo: repo.key, message: `${p.check_kind} auto-delivery: ${(err as Error).message}`, detail: { proposal: id } })
-      }
-    }
+    const r = await autoSubmit(app, id)
+    if (r === 'delivered') return
+    waiting = r
   }
   addItem(app.db, {
     kind: 'proposal-ready', repo: repo.key, ref: id, sensitive: !!p.sensitive,
     title: title(p),
     body: `${p.check_kind} · ${JSON.parse(p.finding_ids).length} finding(s) · delivery: ${p.delivery}${waiting}`,
   })
+}
+
+/**
+ * Deliver a ready proposal whose check auto-submits. Returns 'delivered', or why it waits (for the
+ * approval item). Waiting on the delivery cap marks it, and the tick tries again an hour on.
+ */
+async function autoSubmit(app: App, id: string): Promise<string> {
+  const repo = getRepo(app.db, mustGet(app, id).repo_key)
+  const blocker = deliveryBlocker(app, repo)
+  if (blocker) return ` (auto-submit waiting: ${blocker})`
+  if (deliveriesThisHour(app) >= app.config.current.schedule.deliveries_per_hour) {
+    app.db.prepare('UPDATE proposals SET auto_waiting = 1 WHERE id = ?').run(id)
+    return ' (auto-submit waiting on the hourly delivery cap)'
+  }
+  app.db.prepare('UPDATE proposals SET auto_waiting = 0 WHERE id = ?').run(id)
+  try {
+    await deliver(app, id, 'auto')
+    return 'delivered'
+  } catch (err) {
+    // The fix is validated; a failed push says nothing about it. It stays ready for a person.
+    if (mustGet(app, id).state !== 'ready') throw err
+    logEvent(app.db, { level: 'warn', code: 'DELIVERY_FAILED', repo: repo.key, message: `${mustGet(app, id).check_kind} auto-delivery: ${(err as Error).message}`, detail: { proposal: id } })
+    return ` (auto-submit failed: ${(err as Error).message.slice(0, 300)})`
+  }
+}
+
+/** The tick's half of the delivery cap: deliver what waited on it, oldest first, while it allows. */
+export async function retryAutoSubmits(app: App): Promise<void> {
+  const waiting = app.db.prepare("SELECT id FROM proposals WHERE state = 'ready' AND auto_waiting = 1 ORDER BY updated_at ASC").all() as { id: string }[]
+  for (const { id } of waiting) {
+    if (deliveriesThisHour(app) >= app.config.current.schedule.deliveries_per_hour) return
+    await autoSubmit(app, id).catch(() => undefined)
+  }
 }
 
 export async function deliver(app: App, id: string, by: string): Promise<ProposalRow> {

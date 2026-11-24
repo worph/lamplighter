@@ -390,15 +390,15 @@ function Schedule({ s }: { s: SettingsView }) {
       </div>
       <div className="grid gap-3 md:grid-cols-4">
         {num('slots', 'Concurrent sessions')}
-        {num('sessions_per_day', 'Agent sessions / day', 'detector rounds are free')}
-        {num('deliveries_per_day', 'Deliveries / day', 'auto-submit cap')}
+        {num('sessions_per_hour', 'Agent sessions / hour', 'detector rounds are free')}
+        {num('deliveries_per_hour', 'Deliveries / hour', 'auto-submit cap')}
         {num('open_items_per_repo', 'Open items per repo', 'attention cap')}
         {num('poll_min', 'Poll every (min)')}
         {num('debounce_min', 'Debounce pushes (min)')}
         {num('tick_s', 'Tick (s)')}
       </div>
       <div className="mt-4">
-        <h3 className="text-xs font-semibold text-stone-500 mb-1">Queue — {sch.running.length} running, {sch.queued.length} queued · sessions today {sch.budget.sessions_today}/{sch.budget.sessions_per_day}</h3>
+        <h3 className="text-xs font-semibold text-stone-500 mb-1">Queue — {sch.running.length} running, {sch.queued.length} queued · sessions this hour {sch.budget.sessions_this_hour}/{sch.budget.sessions_per_hour}</h3>
         <ul className="text-xs space-y-1">
           {[...sch.running, ...sch.queued].map((j) => (
             <li key={j.id} className="flex items-center gap-2">

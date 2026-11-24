@@ -271,6 +271,34 @@ describe('admin MCP', () => {
   })
 })
 
+describe('hourly budget', () => {
+  it('counts only the last hour, and delivers a capped auto-submit once the hour allows', async () => {
+    const { deliveriesThisHour, retryAutoSubmits } = await import('./delivery/index.js')
+    const { sessionsThisHour } = await import('./scheduler/index.js')
+    const db = openDb(join(tmp(), 'db.sqlite'))
+    db.prepare("INSERT INTO forges (id, kind, name, created_at) VALUES ('f','git','f','now')").run()
+    db.prepare("INSERT OR IGNORE INTO groups (id, name, policy) VALUES ('default','Default','')").run()
+    db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, created_at) VALUES ('f~r','f','default','','r','x','main','now')").run()
+    const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
+    for (const at of [ago(90), ago(20), ago(5)]) {
+      db.prepare("INSERT INTO events (at, level, code, message) VALUES (?, 'info', 'DELIVERED', 'x')").run(at)
+      db.prepare('INSERT INTO usage (at, agent) VALUES (?, 1)').run(at)
+    }
+    db.prepare("INSERT INTO proposals (id, repo_key, check_kind, branch, base_sha, head_sha, state, delivery, finding_ids, auto_waiting, created_at, updated_at) VALUES ('p1', 'f~r', 'docs', 'lamplighter/docs/x', 'b', 'h', 'ready', 'push', '[]', 1, 'now', 'now')").run()
+    const app = { db, config: { current: configSchema.parse({}) } } as unknown as import('./context.js').App
+    expect(deliveriesThisHour(app)).toBe(2)
+    expect(sessionsThisHour(app)).toBe(2)
+    const waiting = () => (db.prepare("SELECT auto_waiting FROM proposals WHERE id = 'p1'").get() as { auto_waiting: number }).auto_waiting
+    await retryAutoSubmits(app)
+    expect(waiting()).toBe(1)
+    // Once a delivery ages out of the hour, the tick tries it (here the push itself fails, so it stays ready for a person).
+    db.prepare("DELETE FROM events WHERE code = 'DELIVERED' AND at > ?").run(ago(10))
+    await retryAutoSubmits(app)
+    expect(waiting()).toBe(0)
+    expect(db.prepare("SELECT code FROM events WHERE code = 'DELIVERY_FAILED'").get()).toBeTruthy()
+  })
+})
+
 describe('mirrors', () => {
   it('let rounds of one repo fetch and check out at the same moment', async () => {
     const { Mirrors } = await import('./repos/mirror.js')

@@ -3,7 +3,7 @@ import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
 import { listRepos, getRepo, type RepoRow } from '../repos/registry.js'
 import { alert, runAuthor, runRound, settingsFor, type QueueRow } from '../sessions/engine.js'
-import { pollPullRequests } from '../delivery/index.js'
+import { pollPullRequests, retryAutoSubmits } from '../delivery/index.js'
 import { checkAllForges } from '../forges/auth.js'
 
 /**
@@ -38,15 +38,15 @@ export function enqueueRound(
   return { id, coalesced: false }
 }
 
-export function sessionsToday(app: App): number {
-  const since = new Date(Date.now() - 24 * 3600_000).toISOString()
+export function sessionsThisHour(app: App): number {
+  const since = new Date(Date.now() - 3600_000).toISOString()
   return (app.db.prepare('SELECT COUNT(*) AS n FROM usage WHERE agent = 1 AND at > ?').get(since) as { n: number }).n
 }
 
 export interface ScheduleView {
   running: QueueRow[]
   queued: (QueueRow & { waiting?: string })[]
-  budget: { sessions_today: number; sessions_per_day: number; slots: number }
+  budget: { sessions_this_hour: number; sessions_per_hour: number; slots: number }
   enabled: boolean
   rotation: boolean
 }
@@ -101,6 +101,7 @@ export class Scheduler {
         this.lastPrPoll = Date.now()
         await pollPullRequests(this.app).catch(() => undefined)
       }
+      await retryAutoSubmits(this.app).catch(() => undefined)
       this.dispatch()
     } finally {
       this.ticking = false
@@ -180,7 +181,7 @@ export class Scheduler {
     if (j.trigger === 'push' && Date.now() - Date.parse(j.created_at) < cfg.debounce_min * 60_000) return 'debounce'
     const def = this.app.checks.get(j.check_kind)
     const agent = j.job === 'author' || def?.agent !== 'none'
-    if (agent && !j.foreground && sessionsToday(this.app) >= cfg.sessions_per_day) return 'daily session budget spent'
+    if (agent && !j.foreground && sessionsThisHour(this.app) >= cfg.sessions_per_hour) return 'hourly session budget spent'
     for (const r of this.running.keys()) {
       const row = this.app.db.prepare('SELECT repo_key, check_kind FROM queue WHERE id = ?').get(r) as { repo_key: string; check_kind: string } | undefined
       if (row && row.repo_key === j.repo_key && row.check_kind === j.check_kind) return 'same repo and check already running'
@@ -226,7 +227,7 @@ export class Scheduler {
     return {
       running: all.filter((j) => j.state === 'running'),
       queued: all.filter((j) => j.state === 'queued').map((j) => ({ ...j, waiting: this.waitingReason(j) })),
-      budget: { sessions_today: sessionsToday(this.app), sessions_per_day: cfg.sessions_per_day, slots: cfg.slots },
+      budget: { sessions_this_hour: sessionsThisHour(this.app), sessions_per_hour: cfg.sessions_per_hour, slots: cfg.slots },
       enabled: cfg.enabled,
       rotation: cfg.rotation,
     }

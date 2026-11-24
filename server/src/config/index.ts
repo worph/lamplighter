@@ -44,8 +44,8 @@ export const scheduleSchema = z.object({
       poll_min: z.number().int().min(1).max(1440).default(15),
       debounce_min: z.number().int().min(0).max(120).default(2),
       slots: z.number().int().min(1).max(16).default(2),
-      sessions_per_day: z.number().int().min(0).max(10000).default(40),
-      deliveries_per_day: z.number().int().min(0).max(1000).default(10),
+      sessions_per_hour: z.number().int().min(0).max(1000).default(2),
+      deliveries_per_hour: z.number().int().min(0).max(100).default(2),
       open_items_per_repo: z.number().int().min(1).max(100).default(5),
 })
 
@@ -84,8 +84,8 @@ schedule:
   poll_min: 15               # how often each remote is fetched (webhooks make it immediate)
   debounce_min: 2            # pushes closer than this coalesce into one diff round
   slots: 2                   # concurrent agent sessions
-  sessions_per_day: 40       # agent sessions per day across the fleet; detector-only rounds are free
-  deliveries_per_day: 10     # branches / PRs / pushes per day across the fleet
+  sessions_per_hour: 2       # agent sessions per rolling hour across the fleet; detector-only rounds are free
+  deliveries_per_hour: 2     # branches / PRs / pushes per rolling hour across the fleet
   open_items_per_repo: 5     # attention cap: no new proposal while a repo has this many open items
 
 # Per-check overrides of the defaults in checks/<kind>.md. Group and repo settings override these.

@@ -65,7 +65,7 @@ Apps/Lamplighter/     store listing for a Yundera box: backend + beaconify + App
    Rotation (off by default) queues **full** rounds by cadence or by a check-revision change. A
    person's request goes to the front.
 2. **Dispatch.** Foreground first, then tier, then age. A job waits for: the debounce (pushes),
-   the daily session budget (background agent work only), and the rule of one running job per
+   the hourly session budget (background agent work only), and the rule of one running job per
    (repo, check). At most `slots` run at once.
 3. **Round.** A worktree at the head. Detector checks run their detectors. Review checks open a
    session: the prompt carries the check body, the policies, the repo's `LAMPLIGHTER.md` /
@@ -84,8 +84,9 @@ Apps/Lamplighter/     store listing for a Yundera box: backend + beaconify + App
    listed. If it records anything, the proposal fails, and the findings return to open with
    `blocked_input` set, so the same input is not tried again.
 6. **Ready.** If the change is sensitive and the repo is public (visibility re-read), it is
-   **held**. Otherwise, with auto-submit and under the daily delivery cap, it is **delivered**;
-   failing that, an Activity item asks for approval.
+   **held**. Otherwise, with auto-submit and under the hourly delivery cap, it is **delivered**;
+   failing that, an Activity item asks for approval. One held back only by the cap is marked
+   `auto_waiting`, and the tick delivers it when the hour allows.
 7. **Delivery.**
    - `push` fast-forwards the line: the remote rejects anything else, and `fastForwardLine`
      checks ancestry first.

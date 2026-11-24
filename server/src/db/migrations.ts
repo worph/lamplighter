@@ -197,4 +197,6 @@ export const MIGRATIONS: string[] = [
   // A proposal for this finding failed or was refused against this input: do not try again
   // until the input changes (Touchstone's task memory, applied to findings).
   `ALTER TABLE findings ADD COLUMN blocked_input TEXT;`,
+  // Ready and auto-submitting, held back by the hourly delivery cap: the tick delivers it later.
+  `ALTER TABLE proposals ADD COLUMN auto_waiting INTEGER NOT NULL DEFAULT 0;`,
 ]

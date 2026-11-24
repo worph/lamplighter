@@ -41,7 +41,7 @@ The family's habit is to be careful with words and rename before building, not a
 | **activity item** | something that needs a person: a proposal to approve, a PR/branch to review, a report to read, an alert. Activity is also the log of everything that happened. |
 | **policy** | prose, per group and per repo, telling the checks what this codebase considers acceptable, the way Newsdesk's charter is prose. Plus the repo's own `LAMPLIGHTER.md` and `CLAUDE.md`, read as context. |
 | **session** | one model run against one worktree (a review round, a fixing session or a validation session), with its own token and toolset (§10). A **slot** is one concurrent session. |
-| **budget** | what the scheduler may spend: agent sessions per day, and **attention**: open activity items and PRs per day (§8.3). |
+| **budget** | what the scheduler may spend: agent sessions per hour, and **attention**: open activity items and deliveries per hour (§8.3). |
 
 ---
 
@@ -287,12 +287,16 @@ Touchstone's model, copied. **Foreground** first (what a person asked for, FIFO)
 At 200 repos × 9 checks, a weekly full pass alone is 1,800 rounds a week. The budget, not the
 cadence, sets the pace:
 
-- **agent sessions per day**: usage (tokens, cost, wall time) is recorded per session and per
-  proposal (Touchstone's `onUsage`), and tiers 4–6 stop when the day's budget is spent.
+- **agent sessions per hour** (rolling, `schedule.sessions_per_hour`, default 2): usage (tokens,
+  cost, wall time) is recorded per session and per proposal (Touchstone's `onUsage`), and
+  background work waits while the last hour's budget is spent. Hourly rather than daily, so a
+  backlog drains steadily instead of in one burst that hits the backend's own rate limit.
 - **slots**: concurrent sessions against the shared backend, a configured number bounded by its memory (each
   `claude -p` is ~400 MB). **v1:** `schedule.slots`, default 2; background work stops at the session budget, requests do not.
-- **attention**: max open activity items per repo, max PRs/branches opened per day across the
-  fleet. When reached, auto-submit waits and the item asks for a person; no new proposal starts on a repo at its cap.
+- **attention**: max open activity items per repo, max pushes/PRs/branches per rolling hour across
+  the fleet (`schedule.deliveries_per_hour`, default 2). An auto-submit held back by the hourly cap
+  waits ready, and the tick delivers it once the hour allows (a person may approve it sooner); no
+  new proposal starts on a repo at its item cap.
 - **detectors are cheap**: rounds with `agent: none` (deps) or detector-only fast paths do not
   draw on the token budget, so they can run fleet-wide daily.
 
