@@ -267,7 +267,7 @@ deployments that route `/hooks/*` to the backend themselves.
 | request | a person, the chat, or MCP `request_round` | goes to the front, like Touchstone's requests |
 | forge events | PR/branch status poll | proposal state changes, cleanup |
 
-**Debounce:** pushes to one repo within `debounce_min` (default 10) coalesce into one diff round
+**Debounce:** pushes to one repo within `debounce_min` (default 2) coalesce into one diff round
 covering the whole range. Commits matching invariant 4 are dropped before they are queued.
 
 ### 8.2 One queue, tiers
@@ -403,8 +403,7 @@ Two halves on one page:
 - **Inbox** (things awaiting a person), newest first, grouped by repo, filterable by check, group
   and `sensitive`. Kinds: `proposal-ready` (approve / reject / edit-and-approve),
   `pr-open` / `branch-open` (link, merge for bare git, close), `report` (read, mark read, turn into
-  a proposal), `pushed` (revert), `alert`. Every item can be **dismissed with a reason** or
-  **snoozed**.
+  a proposal), `pushed` (revert), `alert`. Every item can be **dismissed with a reason**.
 - **Log**: every round, finding change, proposal step, delivery, decision and alert, as events.
 
 Every decision is stored next to what the model proposed (Newsdesk's override log). The repo

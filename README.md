@@ -95,7 +95,7 @@ Where only a model can see it, the model does both, and the result is held to th
    credential can push to is **blocked from fixing** (rounds and reports only) and says so in the UI.
 5. **Activity.** Everything that needs a person lands in Activity, Newsdesk-style: a PR to
    review, a branch to merge, a report to read, a proposal to approve, an alert. Each item has its
-   actions inline (approve, reject, dismiss with reason, snooze), and every decision is recorded
+   actions inline (approve, reject, dismiss with reason), and every decision is recorded
    next to what the model proposed, so the policy can be tightened from real overrides.
 
 ## Security findings on public repositories

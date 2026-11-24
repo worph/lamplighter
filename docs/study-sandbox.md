@@ -50,7 +50,7 @@ outside (claude-code through Beacon, or the openai/text drivers). Only the tools
 - The backend no longer reads untrusted files itself, which is a small bonus.
 
 Why even docs rounds: one execution path is simpler than two, and it is cheap if installs are lazy
-and cached (§5). A docs round can also run `--help`, typedoc, or check code samples.
+and cached (§4). A docs round can also run `--help`, typedoc, or check code samples.
 
 ### What keeps the token out
 
