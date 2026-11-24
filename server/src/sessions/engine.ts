@@ -108,9 +108,10 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
   const scope: 'diff' | 'full' = job.scope === 'diff' && job.base_sha && def.scopes.includes('diff') ? 'diff' : 'full'
   const id = newId('r')
   insertRound(app, { id, repo: repo.key, def, kind: 'round', scope, base: scope === 'diff' ? job.base_sha : null, head, trigger: job.trigger })
-  const worktree = await app.mirrors.addWorktree(repo, id, head)
+  let worktree: string | undefined
   let session: Session | undefined
   try {
+    worktree = await app.mirrors.addWorktree(repo, id, head)
     let recorded
     let narrative: string
     let usage
@@ -154,7 +155,7 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
     throw err
   } finally {
     if (session) app.sessions.close(session)
-    await app.mirrors.removeWorktree(repo, worktree)
+    if (worktree) await app.mirrors.removeWorktree(repo, worktree)
   }
 }
 
@@ -247,11 +248,12 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
   logEvent(app.db, { code: 'PROPOSAL_STARTED', repo: repo.key, message: `${def.kind}: fixing ${findings.length} finding(s)`, detail: { proposal: pid } })
 
   const roundId = newId('r')
-  insertRound(app, { id: roundId, repo: repo.key, def, kind: 'author', scope: 'full', head: base, proposal: pid, trigger: job.trigger })
-  const worktree = await app.mirrors.addWorktree(repo, roundId, base)
+  let worktree: string | undefined
   let session: Session | undefined
   let head: string
   try {
+    insertRound(app, { id: roundId, repo: repo.key, def, kind: 'author', scope: 'full', head: base, proposal: pid, trigger: job.trigger })
+    worktree = await app.mirrors.addWorktree(repo, roundId, base)
     session = app.sessions.open({ id: roundId, kind: 'author', repo, check: def, worktree, head: base, allowWrite: true, timeoutS: app.config.current.inference.timeout_s })
     const group = getGroup(app.db, repo.group_id)
     const result = await drive(app, session, authorPrompt({ repo, check: def, worktree, groupPolicy: group.policy, findings }), roundId)
@@ -285,7 +287,7 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
     throw err
   } finally {
     if (session) app.sessions.close(session)
-    await app.mirrors.removeWorktree(repo, worktree)
+    if (worktree) await app.mirrors.removeWorktree(repo, worktree)
   }
   await validate(app, getProposal(app.db, pid)!, job.trigger)
   return pid
@@ -303,10 +305,11 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
     .map((id) => app.db.prepare('SELECT * FROM findings WHERE id = ?').get(id) as FindingRow | undefined)
     .filter((f): f is FindingRow => !!f)
   const roundId = newId('r')
-  insertRound(app, { id: roundId, repo: repo.key, def, kind: 'confirm', scope: 'diff', base: p.base_sha, head: p.head_sha!, proposal: p.id, trigger })
-  const worktree = await app.mirrors.addWorktree(repo, roundId, p.head_sha!)
+  let worktree: string | undefined
   let session: Session | undefined
   try {
+    insertRound(app, { id: roundId, repo: repo.key, def, kind: 'confirm', scope: 'diff', base: p.base_sha, head: p.head_sha!, proposal: p.id, trigger })
+    worktree = await app.mirrors.addWorktree(repo, roundId, p.head_sha!)
     session = app.sessions.open({ id: roundId, kind: 'confirm', repo, check: def, worktree, base: p.base_sha, head: p.head_sha!, allowWrite: false, timeoutS: app.config.current.inference.timeout_s })
     const result = await drive(app, session, confirmPrompt({ repo, check: def, base: p.base_sha, head: p.head_sha!, addressed }), roundId)
     const remaining = session.findings
@@ -334,6 +337,6 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
     throw err
   } finally {
     if (session) app.sessions.close(session)
-    await app.mirrors.removeWorktree(repo, worktree)
+    if (worktree) await app.mirrors.removeWorktree(repo, worktree)
   }
 }

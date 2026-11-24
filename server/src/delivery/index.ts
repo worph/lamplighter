@@ -294,9 +294,9 @@ export async function pollPullRequests(app: App): Promise<void> {
   for (const p of open) {
     const ref = JSON.parse(p.submitted_ref ?? '{}') as { number?: number }
     if (!ref.number) continue
-    const repo = getRepo(app.db, p.repo_key)
-    const api = apiFor(app.db, repo)
     try {
+      const repo = getRepo(app.db, p.repo_key)
+      const api = apiFor(app.db, repo)
       const state = await api.prState!(repo.owner, repo.name, ref.number)
       if (state === 'open') continue
       await deleteOwnBranch(app.mirrors, repo, asOwnBranch(p.branch)).catch(() => undefined)
@@ -312,7 +312,7 @@ export async function pollPullRequests(app: App): Promise<void> {
       }
       logEvent(app.db, { code: state === 'merged' ? 'MERGED' : 'PR_CLOSED', repo: repo.key, message: `PR #${ref.number} ${state}; branch ${p.branch} deleted`, detail: { proposal: p.id } })
     } catch (err) {
-      logEvent(app.db, { level: 'warn', code: 'PR_POLL_FAILED', repo: repo.key, message: (err as Error).message })
+      logEvent(app.db, { level: 'warn', code: 'PR_POLL_FAILED', repo: p.repo_key, message: (err as Error).message })
     }
   }
 }
