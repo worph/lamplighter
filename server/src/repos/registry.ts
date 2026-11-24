@@ -42,10 +42,6 @@ export function getRepo(db: Db, key: string): RepoRow {
   return row
 }
 
-export function findRepo(db: Db, key: string): RepoRow | undefined {
-  return db.prepare('SELECT * FROM repos WHERE key = ?').get(key) as RepoRow | undefined
-}
-
 export function listRepos(db: Db): RepoRow[] {
   return db.prepare('SELECT * FROM repos ORDER BY key').all() as RepoRow[]
 }
