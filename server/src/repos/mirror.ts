@@ -89,8 +89,10 @@ export class Mirrors {
   removeWorktree(repo: RepoRow, path: string): Promise<void> {
     return this.serial(repo, async () => {
       const dir = this.gitDir(repo)
+      // Best effort: the rmSync below removes the directory even when git cannot, and prune clears the leftovers.
       await git(['worktree', 'remove', '--force', path], { gitDir: dir }).catch(() => undefined)
       if (existsSync(path)) rmSync(path, { recursive: true, force: true })
+      // Best effort: a stale worktree entry is harmless and the next prune collects it.
       await git(['worktree', 'prune'], { gitDir: dir }).catch(() => undefined)
     })
   }
@@ -114,6 +116,7 @@ export class Mirrors {
       await git(['merge-base', '--is-ancestor', a, b], { gitDir: this.gitDir(repo) })
       return true
     } catch {
+      // `--is-ancestor` exits non-zero when `a` is not an ancestor of `b` (history was rewritten): that is the answer, not a failure.
       return false
     }
   }

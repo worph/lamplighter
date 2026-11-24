@@ -43,6 +43,10 @@ const MAX_REQUEST_S = 3600
 const MIN_REQUEST_S = 30
 /** Transport slack on top of a standalone request's own timeout. */
 const HTTP_SLACK_S = 60
+/** The least a request inside a session is given: the session deadline bounds it. */
+const SESSION_MIN_REQUEST_S = 1
+/** Transport slack on top of an in-session request's own timeout. */
+const SESSION_HTTP_SLACK_S = 5
 /** How long the probe's one-word request may take. */
 const PROBE_TIMEOUT_S = 90
 
@@ -118,8 +122,8 @@ export function createTextDriver(opts: TextOptions): Driver {
    * short transport grace; standalone requests (complete/probe) keep the floor and a 60s grace.
    */
   async function call(messages: Message[], timeoutMs: number, inSession = false): Promise<{ text: string; c: Completion }> {
-    const floorS = inSession ? 1 : MIN_REQUEST_S
-    const graceS = inSession ? 5 : HTTP_SLACK_S
+    const floorS = inSession ? SESSION_MIN_REQUEST_S : MIN_REQUEST_S
+    const graceS = inSession ? SESSION_HTTP_SLACK_S : HTTP_SLACK_S
     const timeout = Math.max(floorS, Math.min(MAX_REQUEST_S, Math.floor(timeoutMs / 1000)))
     let res: { status: number; text: string }
     try {

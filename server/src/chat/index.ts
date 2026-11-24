@@ -14,7 +14,10 @@ import { getSetting, setSetting } from '../settings.js'
  */
 
 const MAX_CALLS = 8
+/** The most of a stored tool result replayed to the model in the prompt. */
 const RESULT_CHARS = 6000
+/** The most of a tool result kept in the stored row. */
+const STORED_RESULT_CHARS = 20_000
 const HISTORY = 24
 
 export interface ChatMessage {
@@ -108,7 +111,7 @@ export async function runTurn(app: App, text: string): Promise<ChatMessage[]> {
     }
     if (answer.say?.trim()) add(app, thread, 'assistant', answer.say.trim())
     try {
-      add(app, thread, 'tool', asText(await t.run(app, parsed.data, 'chat')).slice(0, 20000), t.name)
+      add(app, thread, 'tool', asText(await t.run(app, parsed.data, 'chat')).slice(0, STORED_RESULT_CHARS), t.name)
     } catch (err) {
       add(app, thread, 'tool', `error: ${(err as Error).message}`, t.name)
     }

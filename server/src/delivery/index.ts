@@ -154,7 +154,12 @@ export async function retryAutoSubmits(app: App): Promise<void> {
   const waiting = app.db.prepare("SELECT id FROM proposals WHERE state = 'ready' AND auto_waiting = 1 ORDER BY updated_at ASC").all() as { id: string }[]
   for (const { id } of waiting) {
     if (deliveriesThisHour(app) >= app.config.current.schedule.deliveries_per_hour) return
-    await autoSubmit(app, id).catch(() => undefined)
+    try {
+      await autoSubmit(app, id)
+    } catch (err) {
+      // autoSubmit rethrows only when the proposal left 'ready': log it and go on to the next one.
+      logEvent(app.db, { level: 'warn', code: 'DELIVERY_FAILED', repo: getProposal(app.db, id)?.repo_key, message: `auto-submit retry for proposal ${id}: ${(err as Error).message}`, detail: { proposal: id } })
+    }
   }
 }
 

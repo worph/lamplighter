@@ -13,6 +13,14 @@ import { checkAllForges } from '../forges/auth.js'
  * cadence. The budget gates agent sessions; detector-only rounds are free.
  */
 
+const DAY_MS = 86_400_000
+/** Tokens expire and get revoked: how often the forges' credentials are re-checked. */
+const AUTH_CHECK_MS = 30 * 60_000
+/** How often open pull requests are followed. */
+const PR_POLL_MS = 5 * 60_000
+/** The most repos fetched in one tick, so a large fleet does not stall the tick. */
+const MAX_POLLS_PER_TICK = 20
+
 export function enqueueRound(
   app: App,
   j: { repo: string; check: string; scope: 'diff' | 'full'; base?: string | null; head?: string | null; foreground?: boolean; tier?: number; trigger: string },
@@ -93,14 +101,17 @@ export class Scheduler {
       if (cfg.rotation) this.rotate()
       // Tokens expire and get revoked: re-check every half hour (and on the first tick), so the
       // alert opens before a delivery finds out.
-      if (Date.now() - this.lastAuthCheck > 30 * 60_000) {
+      if (Date.now() - this.lastAuthCheck > AUTH_CHECK_MS) {
         this.lastAuthCheck = Date.now()
+        // Best effort: a failed check is retried on the next due tick.
         await checkAllForges(this.app).catch(() => undefined)
       }
-      if (Date.now() - this.lastPrPoll > 5 * 60_000) {
+      if (Date.now() - this.lastPrPoll > PR_POLL_MS) {
         this.lastPrPoll = Date.now()
+        // Best effort: pollPullRequests logs per-PR failures itself; the next due tick tries again.
         await pollPullRequests(this.app).catch(() => undefined)
       }
+      // Best effort: retryAutoSubmits logs each failed delivery itself; the next tick tries again.
       await retryAutoSubmits(this.app).catch(() => undefined)
       this.dispatch()
     } finally {
@@ -112,7 +123,8 @@ export class Scheduler {
   private async poll(): Promise<void> {
     const cfg = this.app.config.current.schedule
     const due = listRepos(this.app.db).filter((r) => !r.last_fetch_at || Date.now() - Date.parse(r.last_fetch_at) > cfg.poll_min * 60_000)
-    for (const repo of due.slice(0, 20)) await this.pollOne(repo).catch(() => undefined)
+    // Best effort per repo: pollOne logs a failed fetch itself; one repo must not stop the others.
+    for (const repo of due.slice(0, MAX_POLLS_PER_TICK)) await this.pollOne(repo).catch(() => undefined)
   }
 
   async pollOne(repo: RepoRow): Promise<void> {
@@ -158,7 +170,7 @@ export class Scheduler {
         const last = this.app.db
           .prepare("SELECT started_at, check_revision FROM rounds WHERE repo_key = ? AND check_kind = ? AND kind = 'round' AND scope = 'full' AND status = 'done' ORDER BY started_at DESC LIMIT 1")
           .get(repo.key, def.kind) as { started_at: string; check_revision: number } | undefined
-        const stale = !last || Date.now() - Date.parse(last.started_at) > s.cadence_days * 86_400_000
+        const stale = !last || Date.now() - Date.parse(last.started_at) > s.cadence_days * DAY_MS
         const moved = !!last && last.check_revision < def.revision
         if (!stale && !moved) continue
         const queued = this.app.db.prepare("SELECT 1 FROM queue WHERE repo_key = ? AND check_kind = ? AND state IN ('queued','running')").get(repo.key, def.kind)
@@ -217,7 +229,7 @@ export class Scheduler {
       }
     } finally {
       // Done rows are history the queue view does not need beyond a day.
-      this.app.db.prepare("DELETE FROM queue WHERE state IN ('done','failed') AND created_at < ?").run(new Date(Date.now() - 86_400_000).toISOString())
+      this.app.db.prepare("DELETE FROM queue WHERE state IN ('done','failed') AND created_at < ?").run(new Date(Date.now() - DAY_MS).toISOString())
     }
   }
 

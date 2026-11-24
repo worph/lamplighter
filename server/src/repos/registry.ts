@@ -99,6 +99,7 @@ export function parseSettings(json: string): Record<string, unknown> {
   try {
     return JSON.parse(json) as Record<string, unknown>
   } catch {
+    // Unreadable settings count as none set: the defaults apply.
     return {}
   }
 }
