@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Seed throwaway fixture repositories with planted problems, for the local end-to-end test.
 #
-#   seed-fixtures.sh <dir>                         bare repos <dir>/acme-api.git and <dir>/tiny-cli.git
+#   seed-fixtures.sh <dir>                         bare repos <dir>/acme-api.git, <dir>/tiny-cli.git, <dir>/py-svc.git
 #   GITEA_URL=… GITEA_USER=… GITEA_TOKEN=… seed-fixtures.sh <dir>   also creates <user>/acme-web on Gitea
 #
 # Planted: a stale README (wrong script, wrong env var, a missing endpoint), unused exports and an
-# unused file, a vulnerable lodash in package-lock.json, an eval() on request input, a swallowed error.
+# unused file, vulnerable lodash/minimist/express versions, an eval() on request input, a swallowed
+# error. acme-api and py-svc have test suites, so the sandbox can validate fixes (architecture §7.3).
+# With npm on the PATH, acme-api gets a real lockfile (`npm ci` works); without it, a stub.
 set -euo pipefail
 DIR=${1:?usage: seed-fixtures.sh <dir>}
 mkdir -p "$DIR"
@@ -41,24 +43,44 @@ MD
   "name": "acme-api",
   "version": "1.0.0",
   "main": "src/index.js",
-  "scripts": { "start": "node src/index.js" },
-  "dependencies": { "express": "^4.17.1", "lodash": "4.17.15" }
+  "scripts": { "start": "node src/index.js", "test": "node --test" },
+  "dependencies": { "express": "4.17.1", "lodash": "4.17.15", "minimist": "1.2.0" }
 }
 JSON
-  cat > "$d/package-lock.json" <<'JSON'
+  echo 22 > "$d/.nvmrc"
+  if command -v npm > /dev/null; then
+    (cd "$d" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund > /dev/null)
+  else
+    echo "npm not found: acme-api gets a stub lockfile, which \`npm ci\` rejects" >&2
+    cat > "$d/package-lock.json" <<'JSON'
 {
   "name": "acme-api",
   "version": "1.0.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
-    "": { "name": "acme-api", "version": "1.0.0", "dependencies": { "express": "^4.17.1", "lodash": "4.17.15" } },
+    "": { "name": "acme-api", "version": "1.0.0", "dependencies": { "express": "4.17.1", "lodash": "4.17.15", "minimist": "1.2.0" } },
     "node_modules/express": { "version": "4.17.1" },
     "node_modules/lodash": { "version": "4.17.15" },
     "node_modules/minimist": { "version": "1.2.0" }
   }
 }
 JSON
+  fi
+  mkdir -p "$d/test"
+  cat > "$d/test/utils.test.js" <<'JS'
+const test = require('node:test')
+const assert = require('node:assert')
+const { pick, slugify } = require('../src/utils')
+
+test('pick keeps only the listed keys', () => {
+  assert.deepStrictEqual(pick({ id: 1, name: 'Ada', email: 'x' }, ['id', 'name']), { id: 1, name: 'Ada' })
+})
+
+test('slugify', () => {
+  assert.strictEqual(slugify('Hello World!'), 'hello-world-')
+})
+JS
   cat > "$d/src/index.js" <<'JS'
 const express = require('express')
 const { pick } = require('./utils')
@@ -136,6 +158,42 @@ SH
   chmod +x "$d/greet.sh"
 }
 
+py() {
+  local d=$1
+  mkdir -p "$d/tests"
+  echo 3.12 > "$d/.python-version"
+  printf 'requests==2.25.0\nPyYAML==5.3\n' > "$d/requirements.txt"
+  printf 'pytest==8.3.4\n' > "$d/requirements-dev.txt"
+  cat > "$d/README.md" <<'MD'
+# py-svc
+
+Loads YAML and builds links. `python -m pytest` runs the tests.
+MD
+  cat > "$d/app.py" <<'PYTHON'
+import yaml
+from requests.utils import quote
+
+
+def load(text):
+    return yaml.safe_load(text)
+
+
+def link(name):
+    return "https://example.invalid/" + quote(name)
+PYTHON
+  cat > "$d/tests/test_app.py" <<'PYTHON'
+from app import load, link
+
+
+def test_load():
+    assert load("a: 1") == {"a": 1}
+
+
+def test_link():
+    assert link("a b") == "https://example.invalid/a%20b"
+PYTHON
+}
+
 make_bare() {
   local name=$1 fn=$2
   local bare="$DIR/$name.git"
@@ -149,6 +207,7 @@ make_bare() {
 
 make_bare acme-api acme
 make_bare tiny-cli tiny
+make_bare py-svc py
 
 if [ -n "${GITEA_URL:-}" ]; then
   : "${GITEA_USER:?}" "${GITEA_TOKEN:?}"

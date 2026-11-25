@@ -13,7 +13,7 @@ services:
   # shared network because it calls the box's Beacon (and through it the shared claude-code
   # container), and because that agent calls back into its workspace endpoint.
   lamplighter-backend:
-    image: ghcr.io/worph/lamplighter:0.6.2
+    image: ghcr.io/worph/lamplighter:0.7.0
     container_name: lamplighter-backend
     hostname: lamplighter-backend
     restart: unless-stopped
@@ -37,10 +37,14 @@ services:
       LAMPLIGHTER_PUBLIC_URL: http://lamplighter-backend:8080
       # Bearer of the admin MCP endpoint, shared with the lamplighter-mcp sidecar.
       LAMPLIGHTER_ADMIN_MCP_TOKEN: ${LAMPLIGHTER_ADMIN_MCP_TOKEN}
+      # The session sandbox (Settings → Sandbox): Docker through the proxy below, never the socket.
+      # Seeds config.yaml on first boot, and turns the sandbox on there.
+      LAMPLIGHTER_DOCKER_URL: tcp://lamplighter-docker:2375
     volumes:
       - ${DATA_ROOT:-/DATA}/AppData/lamplighter/:/DATA
     networks:
       - pcs
+      - lamplighter-docker
     cpu_shares: 80
     logging: *logging
     deploy:
@@ -48,6 +52,40 @@ services:
         limits:
           cpus: "1"
           memory: 1G
+
+  # ── Docker, for the session sandboxes only ────────────────────────────────────────────
+  # The only holder of the socket. It passes the endpoints a sandbox needs (containers, exec,
+  # archives, images, volumes, networks) and nothing else: no swarm, secrets, plugins, system.
+  # It filters by endpoint, not by request body, so "named volumes only, never a host bind" is
+  # Lamplighter's own rule (server/src/sandbox/spec.ts and its test). Reachable from the backend
+  # alone, on a network with no route out.
+  lamplighter-docker:
+    image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+    container_name: lamplighter-docker
+    hostname: lamplighter-docker
+    restart: unless-stopped
+    expose:
+      - 2375
+    environment:
+      POST: "1"
+      CONTAINERS: "1"
+      ALLOW_START: "1"
+      ALLOW_RESTARTS: "1"
+      EXEC: "1"
+      IMAGES: "1"
+      VOLUMES: "1"
+      NETWORKS: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - lamplighter-docker
+    cpu_shares: 30
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
 
   # ── the admin MCP, announced to this box's Beacon ─────────────────────────────────────
   # Points at the backend directly, never at the gate. The bearer never travels in the
@@ -123,6 +161,8 @@ networks:
   pcs:
     name: ${APP_NET:-pcs}
     external: true
+  lamplighter-docker:
+    internal: true
 
 x-compose-app:
   schema_version: 2
@@ -139,7 +179,7 @@ x-compose-app:
       change:
         apply: env
   id: lamplighter
-  version: "0.6.2"
+  version: "0.7.0"
   routes:
     - { service: lamplighter, name: lamplighter, upstream-port: 80 }
   title:
@@ -150,11 +190,12 @@ x-compose-app:
     en_us: |
       **Lamplighter walks its rounds over your git repositories — on a schedule and after every push — and keeps them lit.**
 
-      Nine checks: documentation drift, known CVEs, outdated dependencies, dead code, refactoring, code quality, bad patterns, architecture and security. Findings are remembered — a dismissal sticks until the code it is about changes. Fixes are written by an LLM, validated by a second, independent session, and delivered per check as a report, a branch, a pull request or a push, with you approving each one in the Activity page.
+      Nine checks: documentation drift, known CVEs, outdated dependencies, dead code, refactoring, code quality, bad patterns, architecture and security. Findings are remembered — a dismissal sticks until the code it is about changes. Fixes are written by an LLM in a credential-free sandbox where it can run the tests and the package manager, validated by the repository's own tests on base and proposal, a re-scan and a second, independent session, and delivered per check as a report, a branch, a pull request or a push, with you approving each one in the Activity page.
 
       - GitHub, Gitea and plain git remotes; forge tokens stay in Lamplighter, never in a prompt
       - Any inference backend: Claude Code over MCP through Beacon or its OpenAI API, or any OpenAI-compatible API
       - An administrator chat, and an admin MCP so other assistants can read the fleet and request rounds
+      - Needs the Docker socket, through a filtering proxy, for its sandboxes; without it, nothing of a repository runs
   developer: Worph
   category: Developer
   icon: icon.png
@@ -206,11 +247,12 @@ x-casaos:
     en_us: |
       **Lamplighter walks its rounds over your git repositories — on a schedule and after every push — and keeps them lit.**
 
-      Nine checks: documentation drift, known CVEs, outdated dependencies, dead code, refactoring, code quality, bad patterns, architecture and security. Findings are remembered — a dismissal sticks until the code it is about changes. Fixes are written by an LLM, validated by a second, independent session, and delivered per check as a report, a branch, a pull request or a push, with you approving each one in the Activity page.
+      Nine checks: documentation drift, known CVEs, outdated dependencies, dead code, refactoring, code quality, bad patterns, architecture and security. Findings are remembered — a dismissal sticks until the code it is about changes. Fixes are written by an LLM in a credential-free sandbox where it can run the tests and the package manager, validated by the repository's own tests on base and proposal, a re-scan and a second, independent session, and delivered per check as a report, a branch, a pull request or a push, with you approving each one in the Activity page.
 
       - GitHub, Gitea and plain git remotes; forge tokens stay in Lamplighter, never in a prompt
       - Any inference backend: Claude Code over MCP through Beacon or its OpenAI API, or any OpenAI-compatible API
       - An administrator chat, and an admin MCP so other assistants can read the fleet and request rounds
+      - Needs the Docker socket, through a filtering proxy, for its sandboxes; without it, nothing of a repository runs
   tips:
     before_install:
       en_us: |

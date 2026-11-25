@@ -1,9 +1,10 @@
 # Study: a sandbox per session (validation, tools, tests)
 
-**Status: brainstorm, 2026-11-24. Nothing here is built.** Continues the Trello card's
+**Status: brainstorm, 2026-11-24; two spikes run 2026-11-25 (§9); decisions written into
+[architecture.md](architecture.md) (D8, §7.3, §10.1, §13) and built in 0.7.0 the same day.** Continues the Trello card's
 *Design Doc v2* comment (the runner design), and partly replaces it: the runner became a container
-per session. [architecture.md](architecture.md) stays the source of truth until this study turns
-into decisions there.
+per session. [architecture.md](architecture.md) is the source of truth; this file keeps the reasoning,
+the comparison and the measurements.
 
 ---
 
@@ -43,6 +44,13 @@ outside (claude-code through Beacon, or the openai/text drivers). Only the tools
 - Lamplighter drives the container **from outside through the Docker API**: copy files in and out
   (archive API), `exec` for each tool call. `read_file`, `grep`, `write_file` become operations on
   the container's filesystem, and `run(cmd)` / a shell is one more tool.
+- **Lamplighter builds the copy-in tar itself, owned by the sandbox user.** `docker cp` keeps the
+  source uid, and with all capabilities dropped even root lacks `CAP_DAC_OVERRIDE`, so it cannot
+  write files it does not own (spike: `npm ci` and `osv-scanner fix` failed with `EACCES` until the
+  tar was re-owned). The same applies to scanner images, which run as root.
+- **Tool calls avoid login shells.** An `exec` through `bash -lc` cost 3.5 s on `codex-universal`
+  (its profile initialises pyenv, nvm, mise…), plain `sh -c` 0.35 s. An agent making 50 calls would
+  lose 3 minutes. File tools use the archive API; `run` uses `sh -c` with PATH set by the image.
 - So **nothing of Lamplighter's lives in the image**: the image only needs `/bin/sh`. That is the
   difference with OpenHands, which has to build a runtime image to put its agent server inside.
 - At the end Lamplighter reads the change back and does the git work itself, as today
@@ -75,26 +83,56 @@ endpoints, and its bind-mount check is a blocklist (`/DATA/AppData/lamplighter` 
 
 ### Isolation level
 
-`/dev/kvm` is absent on `watch.nsl.sh` (no vmx/svm flags). So microVM sandboxes are out on our VPS
+`/dev/kvm` is absent on `watch.nsl.sh` and `holyhorse` (no vmx/svm flags). So microVM sandboxes are out on our VPS
 boxes: Firecracker, Kata, microsandbox, CubeSandbox, Arrakis, Docker Sandboxes. gVisor would work
 without KVM but needs a host install. Realistic setup: plain runc with a non-root user, all
-capabilities dropped, resource caps (CPU, memory, wall clock, log size), and the container removed
-when the session ends.
+capabilities dropped, `no-new-privileges`, resource caps (CPU, memory, pids, wall clock, log size),
+and the container removed when the session ends. The spike ran with 2 CPU, 2 GB and 512 pids
+without trouble.
+
+The image must support a non-root user: that rules out images that install their toolchains
+under `/root` (`codex-universal`: mode 700, `node: command not found` as uid 1000).
 
 ## 4. Choosing the image: how other tools do it
 
-| Tool | Default image | Configuration | Caching |
-|---|---|---|---|
-| OpenAI Codex (cloud) | `codex-universal` (ghcr; Python, Node, Go, Rust…) | `CODEX_ENV_NODE_VERSION`, `CODEX_ENV_PYTHON_VERSION`… pick versions at start; per-repo setup script | container kept after setup |
-| container-use (Dagger) | `ubuntu:24.04` | `.container-use/environment.json` in the repo: `base_image`, `setup_commands` (before the code), `install_commands` (after, e.g. `npm ci`); the agent may change it, a person adopts with `config import` | Dagger layer cache |
-| OpenHands | `nikolaik/python-nodejs:python3.12-nodejs22` (V0) | any base; it **builds** a runtime image on top for its agent server (V1: agent-server image `FROM BASE_IMAGE`) | image reused by hash |
-| Renovate | containerbase | `install-tool node 20.11` at runtime, version read from the repo | tool cache; only inside a containerbase image |
-| Devcontainers / Codespaces | `mcr.microsoft.com/devcontainers/universal` | `.devcontainer/devcontainer.json`: `image`, or Dockerfile + features | prebuilds |
-| act / Gitea act_runner | `catthehacker/ubuntu:act-*`, `gitea/runner-images` | label → image | none |
+Researched 2026-11-25. Sizes are compressed amd64 pulls (Docker Hub / GHCR manifests).
 
-Common pattern: **a ready-made general-purpose image, chosen per repo, plus a setup command per
-repo, plus a cached snapshot after setup.** Only OpenHands needs its own image, for a reason we
-do not have.
+| Tool | Default image (size) | How the toolchain arrives | Version from | Cache across jobs | Non-root |
+|---|---|---|---|---|---|
+| Gitea act_runner | `runner-images:ubuntu-*`: `-slim` 0.13 GB, default 0.59 GB, `-full` 19.9 GB | `setup-*` actions download into `/opt/hostedtoolcache` at job time | the workflow (`node-version-file`…) | `tool_cache_mode: none` by default, `shared` keeps it per slot; built-in actions/cache server | tool cache writable by `nobody` |
+| Forgejo runner | `node:lts` (~0.41 GB) | same as act_runner | same | cache server | per image |
+| nektos/act | `catthehacker/ubuntu:act-*` 0.58 GB; `full-*` 19.9 GB (~60 GB extracted) | `setup-*` actions | workflow | none | `runner-*` tags |
+| GitHub hosted | a full VM, nothing to pull | preinstalled, plus `setup-node`/`setup-python`: tool cache, then actions/node-versions, then nodejs.org | `.nvmrc`, `.node-version`, `.tool-versions`, `package.json`; `.python-version` | package-manager caches via actions/cache | `runner` + sudo |
+| Copilot coding agent | hosted runner | repo-authored `copilot-setup-steps.yml` (≤ 59 min); without it, "trial and error" | the repo's workflow | actions/cache | `runner` |
+| OpenHands V1 | `agent-server:*-python` 1.56 GB, on `debian:trixie-slim` with Python and Node copied from official images | anything else baked into a custom `BASE_IMAGE`; the agent may `apt` at runtime | none | BuildKit cache | uid 10001 + sudo |
+| Renovate / containerbase | `containerbase/base` 0.14 GB; `renovate` 0.45 GB vs `-full` 2.74 GB | `install-tool <tool> <ver>` at runtime | Renovate's own code reads `engines`, `.nvmrc`, `.node-version` | `containerbaseDir`, keyed by URL hash | uid 12021, read-only rootfs supported |
+| mise | `jdxcode/mise` 0.06 GB | downloads at runtime | `.tool-versions`, `mise.toml`, and (opt-in) `.nvmrc`, `package.json`, `.python-version`, `go.mod`, `rust-toolchain.toml`… | data dir on a volume | yes |
+| container-use (Dagger) | `ubuntu:24.04` | `setup_commands` / `install_commands`, editable by the agent | the agent | Dagger layer cache | per image |
+| Devcontainer features | any base | each feature's `install.sh` at build time | `version` option | image layers, prebuilds | `_REMOTE_USER` |
+| Jules | Ubuntu VM, Python/Node/Java/Go/Rust preinstalled | per-repo setup script, then a snapshot | the script | VM snapshot | not stated |
+| E2B, Daytona, Modal | templates built ahead | baked in, snapshotted | the template | snapshot | not verified |
+| SWE-bench | base, ~60 env images, per-instance images (≥ 120 GB, ~2 TB at instance level) | prebuilt per repo version | hand-curated | image cache | not verified |
+| OpenAI Codex (cloud) | `codex-universal` 43.7 GB on disk (spike, §9) | everything preinstalled; `CODEX_ENV_*` picks the version | env variables | container kept after setup | root only |
+
+Not verified: Daytona and Modal details, devbox/flox (Nix), the tool-cache mount path in GitHub
+`container:` jobs.
+
+Patterns:
+
+1. **Nobody defaults to the 20 GB image.** act_runner, Forgejo, act and Renovate default to a
+   0.1–0.6 GB base and keep "full" opt-in. A giant image only makes sense on a VM where it is
+   already on disk (GitHub hosted, Codex cloud): exactly what `codex-universal` showed in the spike.
+2. **Toolchains are installed at job time into a known cache directory** (`/opt/hostedtoolcache`,
+   containerbase's dir, mise's data dir). Keeping it across jobs is a runner setting, not the image's.
+3. **The version comes from repo files** (`.nvmrc`, `.python-version`, `.tool-versions`, `engines`,
+   `go.mod`), read either by the installer (setup-*, mise) or by the orchestrator (Renovate).
+4. **Agent products let the repo describe its own setup** (copilot-setup-steps, Jules' script,
+   container-use, devcontainer), then cache or snapshot the result.
+5. **Non-root with a fixed high uid** (10001, 12021) and a tool cache that user owns; most still
+   allow sudo for apt.
+
+The first draft of this study took the opposite lesson (one general-purpose image, plus a snapshot).
+The spike and the table agree: **a slim base, toolchains on demand, caches on volumes.**
 
 ### Proposed resolution order
 
@@ -102,16 +140,45 @@ do not have.
 2. `.container-use/environment.json`, if present (free compatibility).
 3. `.devcontainer/devcontainer.json` → its `image` field only. Building Dockerfiles and features
    through `@devcontainers/cli` comes later, if at all.
-4. Group default, then the global default: **`codex-universal`**, pinned by digest. Versions mapped
-   from `.nvmrc`, `.python-version`, `engines` to its `CODEX_ENV_*` variables. `install` detected
-   (`npm ci`, `pnpm i`, `pip install -r …`, …).
-5. **Cache:** after `install`, `docker commit` the container, tagged
-   `(repo, image digest, lockfile hash)`. The next session on the same lockfile starts installed.
-   Needs a pruning rule (LRU plus a size cap).
+4. Group default, then the global default, **tested in spike 2 (§9):** the official
+   `buildpack-deps:bookworm-scm` (515 MB on disk: Debian with git, curl, CA certificates; what
+   act_runner's default image builds on) plus **mise** installing every toolchain on demand. Its
+   "idiomatic" version files are enabled for node and python (more to add: go, java, ruby, rust),
+   so `.nvmrc`, `engines`, `.python-version`… pick the version with no code of ours. Still no image
+   of our own:
+   - `jdxcode/mise` has no shell, but its binary is static (175 MB; it must be called `mise`, or it
+     acts as a shim). It is copied once into the shared mise volume through the archive API, so a
+     session needs no copy and no image layer.
+   - Runs as a fixed non-root uid (10001 in the spike) with all capabilities dropped. Named volumes
+     start owned by root: a one-off helper with only `CAP_CHOWN` and no network hands each new
+     volume to that uid.
+   - Cold, mise installed Node 22 in 36 s and Python 3.12 in 14 s (prebuilt); warm, `mise install`
+     is a 1–2 s no-op. mise checks the OpenPGP signature of Node's checksums and GitHub artifact
+     attestations of the Python builds.
 
-Installs are **lazy**: a session starts from the source and the base image; `install` runs (or the
-cached snapshot is used) only when a tool needs dependencies. A docs or architecture round then
-starts in about a second.
+   Alternatives, not retained:
+   - **containerbase** (Renovate's): built for this exact job, hardened for non-root and read-only
+     rootfs, but it only installs; the "repo file → version" logic is Renovate's TypeScript, which
+     we would have to rewrite.
+   - **Per-language official images** (`node:22-bookworm-slim`, 329 MB): simplest, but break on
+     polyglot repos and force the choice before the repo is read.
+   - `codex-universal` or a `-full` image stays something a repo or group may name, never a default.
+
+   `install` detected (`npm ci`, `pnpm i`, `pip install -r …`, …).
+5. **Cache the toolchains and the package manager, not the container:** a shared volume for mise's
+   data dir, and one cache volume per ecosystem (or per repo) at `~/.npm`, `~/.cache/pip`… With a warm npm cache, `npm ci` took 11 s instead of 15 s,
+   and the cache survives image updates. `docker commit` was dropped: it took **31 minutes** on
+   `codex-universal` (16 s on a 329 MB image) under the containerd image store, and a commit does
+   not capture named volumes, so `/work/node_modules` would be lost anyway. Needs a pruning rule
+   (size cap, LRU). Concurrent sessions may share the mise volume: three sessions installing
+   node@20 at the same moment all finished within 0.8 s of each other and ran it at once; mise
+   keeps a `lockfiles/` directory (one run, not a proof). Pin mise's version: it is the
+   supply-chain surface. After both spikes: mise data 88 MB cache + 203 MB Node (two versions) +
+   110 MB Python + the 168 MB binary.
+
+Installs are **lazy**: a session starts from the source and the base image; `install` runs only
+when a tool needs dependencies. Measured on `codex-universal`, a session was ready in about 6 s,
+4 s of it in the image's entrypoint script; a slim image without one should start in about 2 s.
 
 The repo's CI workflows (`.github/workflows`, `.gitea/workflows`) are a good **hint** for the
 install and test commands, but are not run (`act`/`act_runner` would run deploy steps, need
@@ -119,8 +186,12 @@ secrets, and pull third-party actions).
 
 ## 5. Scanners and tools: official images, not ours
 
-Each scanner runs as **its own official image** against the same session volume, as CI does
-`uses: docker://…`. Declared in the check files:
+Each **detector** runs as **its own official image** against the same session volume, as CI does
+`uses: docker://…` (spike: `osv-scanner` in its image read the session's named volume, 9 s).
+**Fix tools** run in the session container instead, because they call the package manager: in its
+own image, `osv-scanner fix --strategy=relock` computed the right plan, then failed with
+`cannot find npm executable`. The tool's static binary is copied in from its official image through
+the archive API (4 s), so there is still no image of our own. Declared in the check files:
 
 ```yaml
 # checks/cve.md frontmatter (sketch)
@@ -128,14 +199,20 @@ detectors:
   - image: ghcr.io/google/osv-scanner:v2      # pinned by digest in practice
     run: osv-scanner scan -r /work --format sarif
 fix_tools:
-  - image: ghcr.io/google/osv-scanner:v2
-    run: osv-scanner fix --non-interactive --strategy=relock -M /work/package.json -L /work/package-lock.json
+  - binary_from: ghcr.io/google/osv-scanner:v2:/osv-scanner   # copied into the session container
+    run: osv-scanner fix --non-interactive --strategy=relock -M package.json -L package-lock.json
 ```
 
 - **CVE:** `osv-scanner fix` (guided remediation: in-place, relock or override strategies) does
   the lockfile fix that v1 could not; its docs warn it may run package scripts, which is one more
-  reason it belongs in the sandbox. Trivy covers CVEs, secrets, IaC and licences in one binary.
+  reason it belongs in the sandbox. Spike: relock found 3 bumps fixing 23/23 vulnerabilities, then
+  `npm ci` and the tests passed and the re-scan reported no issues: the full deterministic proof.
+  `in-place` found nothing to patch, correctly, on exact pins. Trivy covers CVEs, secrets, IaC and
+  licences in one binary.
 - **Deps:** Renovate in lookup/dry-run mode knows every ecosystem; simpler: `npm-check-updates`.
+- **Scope the scan to the repo's own manifests.** In spike 2, scanning after `pip install` also read
+  pip's vendored SBOM inside `.venv` and reported setuptools CVEs the repo does not own. Scan
+  before install, or skip `.venv` and `node_modules`.
 - **Dead code / patterns / secrets / lint:** knip, opengrep (the LGPL fork of Semgrep CE),
   Gitleaks, MegaLinter (one image, 100+ linters).
 - **SARIF as the common output:** most of these emit it. The detector layer becomes "run a tool,
@@ -178,23 +255,79 @@ report-only). Lamplighter must still work there (invariant 10).
 
 ## 8. Open, for tomorrow
 
-1. **Spike first:** start `codex-universal` on the acme-api fixture, install, run `npm test`, run
-   `osv-scanner fix` in its official image against the same volume; time a cold start against a
-   cached snapshot. Check `codex-universal`'s real size and licence, and the disk on a box.
-2. **Shared volume between the env container and scanner containers:** a named volume per session,
-   or copy in/out per container? (Named volumes are simplest; check that the socket proxy allows
-   them without allowing host binds.)
+1. ~~**Spike first**~~: done 2026-11-25 (§9), folded into §3–§5.
+2. **Shared volume:** ~~named volume or copy in/out?~~ A named volume per session works (spike).
+   Still to check: that docker-socket-proxy allows named volumes while refusing host binds.
 3. **Shell or named tools per check:** a free shell for author sessions, named commands for
    validation? A per-check setting?
 4. **How the shell reaches each driver:** claude-code calls our HTTP tools today; a `shell` tool
    is one more endpoint. For openai/text it is one more function. Output size caps and timeouts per
    call.
-5. **Snapshot pruning:** size cap, LRU, per-repo limit; where the snapshots live.
+5. **Cache volume pruning:** size cap, LRU; one volume per ecosystem or per repo.
 6. **Monorepos/submodules** (yundera-root, meta-root-v2): one sandbox per submodule repo, or skip.
 7. **Which part of `LAMPLIGHTER.md` is the schema** (`sandbox:` and `validate:` blocks), and how it
    relates to `.container-use/environment.json`.
-8. Write the result back into architecture.md (§7.3, §10, §13) once decided, and post the summary
-   on the Trello card.
+8. ~~Write the result back into architecture.md~~ done (D8, §7.3, §10.1, §13). Post the summary on
+   the Trello card: not done.
+9. ~~**Toolchains without one big image**~~: researched (§4) and spiked (§9, spike 2). Left:
+   an ecosystem osv-scanner cannot fix (PyPI: not tried), and timings on an idle box.
+10. **The acme-api fixture** has a stub lockfile (`npm ci` rejects it) and no `test` script. Give
+   `seed-fixtures.sh` a real lockfile and a `node --test` suite before end-to-end tests rely on it,
+   and add a Python fixture (spike 2 used one: `.python-version`, vulnerable `requests`/`PyYAML`
+   pins, a pytest suite run with `python -m pytest`).
+
+## 9. Spike results (2026-11-25, holyhorse)
+
+### Spike 1: `codex-universal`
+
+Box: 3 vCPU, 7.8 GiB (2.6 available), 298 GB free, Docker 29.8.2 with the **containerd image
+store**, no `/dev/kvm`. Fixture: a copy of acme-api with a real lockfile (the seeded one is a stub
+`npm ci` rejects), exact pins `express 4.17.1`, `lodash 4.17.15`, `minimist 1.2.0`, and a
+`node --test` suite. Every container: `--cap-drop ALL`, `no-new-privileges`, 2 CPU, 2 GB,
+512 pids, its own bridge network, the workspace in a named volume at `/work`.
+
+| Step | Result |
+|---|---|
+| Pull `codex-universal` (amd64) | **64 min, 43.7 GB** on disk (10.9 GB compressed, 24 layers) |
+| Pull `osv-scanner` 2.7.1 / `node:22-bookworm-slim` | 66 s, 481 MB / 43 s, 329 MB |
+| Session start until the entrypoint is ready | ~6 s (start 2 s + `setup_universal.sh` 4 s) |
+| Copy-in (archive API) | 0.4 s |
+| `docker exec` via `bash -lc` / plain `sh -c` | **3.5 s** / 0.35 s per call |
+| `npm ci` (52 packages) cold / with a shared npm cache volume | 15 s / 11 s |
+| `npm test` | 4.6 s (mostly the login shell) |
+| `osv-scanner scan` in its own image, same volume | 9 s: 23 vulns in 9 packages |
+| `osv-scanner fix --strategy=in-place` | no patch possible (exact pins), correct |
+| `osv-scanner fix --strategy=relock` in its own image | plan right (3 bumps fix 23/23), **write fails: no `npm`** |
+| Same, binary copied into the session container | 99 s, then `npm ci` 25 s, tests green, re-scan **"No issues found"** |
+| `docker commit` of the session container | **31 min** (diff a few MB); 16 s on a 329 MB image |
+| Non-root (`--user 1000`) on `codex-universal` | **fails**: toolchains under `/root` (mode 700), `node: command not found` |
+| Token-free sandbox | no remote, no credential in `.git/config`, no secret in env; `pcs` names unresolved |
+
+### Spike 2: slim base + mise, non-root
+
+`buildpack-deps:bookworm-scm`, uid 10001, all capabilities dropped, mise and package caches on
+shared named volumes, nothing bound from the host. **holyhorse was loaded (load average 30–38 on
+3 vCPU) during this run, so the timings are upper bounds**: a container start took 4–19 s
+instead of 2 s earlier in the day.
+
+| Step | Result |
+|---|---|
+| Pull `buildpack-deps:bookworm-scm` / `jdxcode/mise` | 225 s, 515 MB / 53 s, 234 MB (no shell; static binary 175 MB) |
+| `mise install` Node 22 (from `.nvmrc`), cold / warm | 36 s / 2 s; Node 22.23.5, OpenPGP-checked |
+| `npm ci` + `npm test` on acme-api | 10 s + 2.6 s, green |
+| `mise install` Python 3.12 (from `.python-version`), cold / warm | 14 s / 1 s; 3.12.16 prebuilt, attestation verified |
+| `venv` + `pip install` on py-svc, cold / warm pip cache | 61 s / 30 s; `python -m pytest` 2 passed |
+| `osv-scanner scan` on py-svc | requests, PyYAML, pytest CVEs found; plus setuptools from pip's SBOM in `.venv` (noise) |
+| `exec sh -c true` / a shim call (`node -e 0`) | 0.8 s / 0.5 s (no login shell) |
+| 2 then 3 sessions installing the same Node at once, one volume | all succeeded, all ran `node` right after |
+
+The conclusions of both spikes are folded into §3 (copy-in ownership, exec overhead, non-root),
+§4 (default image, mise, cache volumes instead of `docker commit`) and §5 (fix tools in the session
+container, scan scope).
+
+Left on holyhorse: the images (`codex-universal`, `osv-scanner`, `node:22-bookworm-slim`,
+`buildpack-deps:bookworm-scm`, `jdxcode/mise`) and `~/lamp-spike/` (fixtures, `run.sh`,
+`run2.sh`, logs, the extracted mise binary).
 
 ## Sources
 
@@ -206,6 +339,19 @@ report-only). Lamplighter must still work there (invariant 10).
 - Renovate: [containerbase/base](https://github.com/containerbase/base) ·
   [Docker build process](https://docs.renovatebot.com/docker-build-process/)
 - OSV-Scanner: [guided remediation](https://google.github.io/osv-scanner/experimental/guided-remediation/)
+- Runners: [act_runner config](https://gitea.com/gitea/act_runner/src/branch/main/internal/pkg/config/config.example.yaml) ·
+  [gitea/runner-images tags](https://hub.docker.com/r/gitea/runner-images/tags) ·
+  [Forgejo runner register.go](https://code.forgejo.org/forgejo/runner/src/branch/main/internal/app/cmd/register.go) ·
+  [act runners](https://nektosact.com/usage/runners.html) · [catthehacker images](https://github.com/catthehacker/docker_images) ·
+  [setup-node](https://github.com/actions/setup-node) · [setup-python](https://github.com/actions/setup-python)
+- Agents: [Copilot setup steps](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/customize-the-agent-environment) ·
+  [OpenHands agent-server Dockerfile](https://github.com/OpenHands/software-agent-sdk/blob/main/openhands-agent-server/openhands/agent_server/docker/Dockerfile) ·
+  [Jules environment](https://jules.google/docs/environment/) · [E2B templates](https://docs.e2b.dev/sandbox-template) ·
+  [SWE-bench Docker setup](https://www.swebench.com/SWE-bench/guides/docker_setup/)
+- Installers: [mise versions and idiomatic files](https://mise.jdx.dev/dev-tools/versions.html) ·
+  [Renovate node-version.ts](https://github.com/renovatebot/renovate/blob/main/lib/modules/manager/npm/post-update/node-version.ts) ·
+  [Renovate running](https://docs.renovatebot.com/getting-started/running/) ·
+  [devcontainer features spec](https://containers.dev/implementors/features/)
 - MicroVM sandboxes (ruled out without KVM):
   [Docker Sandboxes](https://www.docker.com/blog/why-microvms-the-architecture-behind-docker-sandboxes/) ·
   [microsandbox](https://github.com/superradcompany/microsandbox) ·

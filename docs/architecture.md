@@ -1,7 +1,10 @@
 # Lamplighter: architecture
 
 **Status: v1 built, 2026-11-19.** Decisions are in §1. Where v1 implements less than this document
-describes, the section says so in a **v1:** note; everything else is how the code works.
+describes, the section says so in a **v1:** note; everything else is how the code works. The
+session sandbox (D8, §10.1) is built since **0.7.0, 2026-11-25**; a **v1 mode:** note says what a
+box without it does. The reasoning and the measurements behind it are in
+[study-sandbox.md](study-sandbox.md).
 
 ---
 
@@ -18,6 +21,7 @@ describes, the section says so in a **v1:** note; everything else is how the cod
 | D5 | First tenants | Not decided. Onboarding is M8; nothing in the design depends on which repos come first. |
 | D6 | Delivery modes | Per check type, like Touchstone's workshop switches: `report`, `branch`, `pr`, `push`, plus *auto-submit* and *armed*. |
 | D7 | Review flow | Branches and PRs raise an item in **Activity** for a person to act on, the Newsdesk flow. |
+| D8 | Running repo code | **A container per session** (the sandbox, §10.1), driven from outside through the Docker API. The agent stays outside; only its tools run inside. Credential-free: what it protects is the forge tokens, and only that. Shell and network allowed inside. No image of our own: an official base plus toolchains installed on demand. *Decided and built 2026-11-25 (0.7.0).* It replaced the "runner sidecar" first planned. |
 
 ---
 
@@ -41,6 +45,7 @@ The family's habit is to be careful with words and rename before building, not a
 | **activity item** | something that needs a person: a proposal to approve, a PR/branch to review, a report to read, an alert. Activity is also the log of everything that happened. |
 | **policy** | prose, per group and per repo, telling the checks what this codebase considers acceptable, the way Newsdesk's charter is prose. Plus the repo's own `LAMPLIGHTER.md` and `CLAUDE.md`, read as context. |
 | **session** | one model run against one worktree (a review round, a fixing session or a validation session), with its own token and toolset (§10). A **slot** is one concurrent session. |
+| **sandbox** | the credential-free container a session's tools run in, for the session's whole life (§10.1). |
 | **budget** | what the scheduler may spend: agent sessions per hour, and **attention**: open activity items and deliveries per hour (§8.3). |
 
 ---
@@ -53,6 +58,7 @@ These are the rules the design is built around. Code that breaks one is a bug ev
    fetch, push, branch creation, PR and deletion is done by the backend through one guarded forge
    client. A force-push cannot be written with it: there is no `update ref` call, only
    *create branch*, *delete own branch*, and (for `push` delivery) *fast-forward the line*.
+   A forge token never enters a sandbox (§10.1): its clone has no remote.
 2. **The fixer never judges its own work.** A proposal becomes `ready` only through validation run
    separately from the authoring session: commands the repo declares, and a confirming round in
    a fresh agent session.
@@ -94,10 +100,12 @@ lamplighter (backend, one Node process)
 ├── activity/      items, actions, the event log, web push
 ├── chat/          administrator chat (the Touchstone/Newsdesk loop)
 ├── mcp/           admin MCP server + the session workspace (MCP and plain HTTP)
+├── sandbox/       session containers through the Docker API: clone in, exec, patch out, scanners, caches
 └── web/           React SPA: Chat · Repos · Activity · Settings
 
 lamplighter-mcp    (beaconify sidecar: announces the admin MCP to Beacon)
 lamplighter        (AppShield sidecar: SSO in front of everything, /hooks included)
+lamplighter-docker (docker-socket-proxy sidecar: the only holder of the socket; §10.1)
 
 inference backend  (external, shared: claude-code via Beacon, or any OpenAI-compatible API)
 ```
@@ -121,8 +129,14 @@ revision: 3                 # bumping it re-eligibles every repo for a full roun
 scopes: [diff, full]        # which scopes make sense for this check
 cadence: { full: 7d }       # how stale a full round may get before it is due
 detectors:                  # deterministic tools run before the agent, output handed to it
-  - run: osv-scanner --format json -r .
-    when: [package-lock.json, yarn.lock, pnpm-lock.yaml, go.sum, requirements*.txt, poetry.lock]
+  - name: osv-scanner         # an official image, run in the sandbox against the clone
+    image: ghcr.io/google/osv-scanner:v2.7.1@sha256:…
+    run: [scan, source, -r, /work/repo, --format, json]
+    format: osv-json          # or sarif, which most scanners emit
+    ok_exit: [1, 128]         # exit codes that mean "ran"
+    fallback: osv             # the built-in that runs without the sandbox
+fix_tools:                    # static binaries copied onto a fixing session's PATH
+  - { image: "ghcr.io/google/osv-scanner:v2.7.1@sha256:…", path: /osv-scanner }
 agent: triage               # none | triage | review: how much of the round is the model
 delivery:
   mode: pr                  # report | branch | pr | push
@@ -133,10 +147,14 @@ delivery:
 You are triaging vulnerability reports for one repository…
 ```
 
-- **Detectors** run in Lamplighter itself, on the worktree, before any agent call. **v1:** two
-  built-in detectors, `osv` (package-lock.json against api.osv.dev) and `npm-outdated` (direct
-  dependencies against the npm registry); shell-command detectors need a runner and are later work. Their raw output is
-  attached to the round. A check with `agent: none` produces findings from detectors alone.
+- **Detectors** run before any agent call, and before anything is installed. Their output is
+  attached to the round; a check with `agent: none` produces findings from detectors alone, and a
+  review check gets them as hints to verify. Two kinds: a tool's **official image**, run in the
+  sandbox against the session's clone read-only (seeded: osv-scanner for `cve`, Gitleaks for
+  `security`), reading **SARIF** or osv-scanner's JSON, so a new scanner is a few lines in a check
+  file, not code; and two **built-ins** run in Lamplighter itself, `osv` (package-lock.json against
+  api.osv.dev) and `npm-outdated` (direct dependencies against the npm registry). **v1 mode:** an
+  image detector runs its `fallback` built-in, or is reported as not run, never as clean.
 - **`agent: triage`**: the model gets detector output and decides which items are real.
   **`agent: review`**: the model reads the code itself; detectors are hints.
 - **Revision** works like Touchstone's *standard in force*: a finding raised under an older revision
@@ -227,16 +245,29 @@ drafting → validating → ready → (awaiting approval) → submitted → land
 
 Run after the authoring session, as separate steps:
 
-**v1:** the model has file tools, not a shell, so step 1 does not exist yet and `cve`/`deps` are
-report-only (a fix needs a lockfile regeneration). Validation is step 2: the confirming round.
+Cheapest first, stopping at the first failure; the confirming round comes last because it is the
+only step that costs tokens. **v1 mode** (no sandbox): step 1 is skipped, step 2 runs the
+built-in detectors only, and the model has file tools, so a `cve`/`deps` fix cannot refresh a
+lockfile.
 
-1. **Mechanical.** The repo's declared commands (from `LAMPLIGHTER.md`, else detected: `npm test`,
-   `go test ./...`, `pytest`, …) on base and on the proposal. Anything that passed on base must
-   pass on the proposal.
-2. **Confirming round.** A fresh session runs the same check at `diff` scope on the proposal.
+1. **Mechanical.** The repo's commands (`LAMPLIGHTER.md` → `sandbox.test`, else detected: `npm test`,
+   `python -m pytest`, `go test ./...`, `cargo test`) on base and on the proposal, each side in a
+   **fresh** sandbox (`mise install`, the install steps, then each command): the fixer's own green
+   runs do not count (invariant 2). The commands and the image are read from the **base**, so a fix
+   cannot change how it is judged. Anything that passed on base must pass on the proposal. Base
+   results are cached per `(repo, sha, command, image)` (`command_runs`); red on base does not gate
+   but is reported; a head failure is re-run once to rule out a flaky test.
+2. **Cross-checks.** The proposal's own check's detectors and the `cve` detectors, whatever the
+   kind (a refactor can pull in a dependency), on base and on the proposal. An addressed finding a
+   scanner raised must be gone from the proposal — for a CVE, the deterministic proof — and the
+   proposal may not raise anything the base did not. A registry hiccup in a built-in skips this
+   step; it never fails a proposal (invariant 6).
+3. **Confirming round.** A fresh session runs the same check at `diff` scope on the proposal.
    The addressed findings must be gone and no new finding may appear (invariant 3).
-3. **Cheap cross-checks.** The `cve`/`deps` detectors and the `patterns` detectors run on the
-   proposal regardless of its kind, because a refactor can pull in a dependency.
+
+The results go on the proposal (`validation.mechanical`, `validation.scan`) and into the PR body
+as evidence: commands, base against head, durations; for a CVE, the advisories come from OSV, not
+from the model.
 
 A repo whose tests cannot run (no command, toolchain missing) validates with the confirming round
 alone, and its proposals are **never auto-submitted**, whatever the switch says.
@@ -391,8 +422,103 @@ recognises), a timeout, or a session that ended **without a single workspace cal
 callback URL is wrong) all make the round `blocked` and open one deduplicated alert. None of
 them opens or closes a finding.
 
-**Untrusted code:** v1 runs nothing from the repository. The day a runner executes repo scripts
-(tests, package managers) it belongs in a separate, credential-free container.
+**Untrusted code:** v1 runs nothing from the repository. Running it is the sandbox's job (§10.1).
+
+### 10.1 The session sandbox
+
+Built in 0.7.0 (D8), `server/src/sandbox/`. Measured first in two spikes on holyhorse, 2026-11-25
+([study-sandbox.md](study-sandbox.md) §9); its Docker tests (`LAMPLIGHTER_TEST_DOCKER`) run
+against a real engine.
+
+**Shape.** Every session, a docs round included, gets one container for its whole life. The agent
+and its driver stay where they are (§10); the workspace tools run against the container instead
+of a local worktree:
+
+- Lamplighter drives it **from outside through the Docker API**: files in and out through the
+  archive API, one `exec` per tool call. `read_file`, `grep` and `write_file` act on the
+  container's filesystem, and `run(cmd)` (a shell) is one more tool. Nothing of Lamplighter's
+  is in the image: it needs `/bin/sh` and nothing else.
+- Lamplighter builds the copy-in tar itself, **owned by the sandbox user**: `docker cp` keeps the
+  source uid, and with every capability dropped even root cannot write files it does not own.
+- Tool calls use the archive API or `sh -c`, **never a login shell**: on an image whose profile sets
+  up its toolchains, that costs 3.5 s per call against 0.35 s.
+- The clone arrives as a `git bundle` of the host worktree's history, cloned inside, remote
+  removed. At the end of a fixing session the change comes back as a binary patch
+  (`git diff --cached --binary`, dependency folders excluded), is applied to the host worktree, and
+  Lamplighter commits it there as before (invariant 1). The container and its volume are removed;
+  any left by a crash are reaped at boot (label `lamplighter.sandbox`).
+- Every sandbox session — review, fixing, confirming — has `run`; only a fixing session's changes
+  are read back. One call is capped by `run_timeout_s` and the session's remaining time; its output
+  is cut in the middle to what every driver returns whole.
+
+**What keeps the token out** (the only thing it protects; repository code reaching the model is
+not a threat it designs against, since the model already reads it):
+
+- no environment from Lamplighter, no `/DATA`, no host bind of any kind, no Docker socket;
+- a clone **with history** (`git log`, `git blame` are useful once there is a shell) and **no
+  remote**; the token travels per command as `http.extraHeader` and is never stored in the
+  mirror. A test asserts the sandbox's `.git/config` carries no credential;
+- **its own Docker network, not `pcs`**, so a prompt-injected agent cannot call Beacon, claude-code
+  or the admin MCP. Egress to the internet is allowed (installs, registries).
+
+**Who holds the socket.** Not Lamplighter: the `lamplighter-docker` sidecar
+(docker-socket-proxy), limited to the containers, exec, images, volumes and networks endpoints,
+on a compose network with no route out, which Lamplighter calls with `dockerode`. Anyone who
+takes over Lamplighter already has the tokens, so the proxy protects the host. It filters by
+endpoint, not by request body: "named volumes only, never a host bind" is enforced by
+`sandbox/spec.ts`, the one place every container is built, and its test.
+
+**Isolation.** Plain runc: a fixed non-root uid, `--cap-drop ALL`, `no-new-privileges`, CPU,
+memory, pids, wall-clock and log-size caps. Our VPS boxes have no `/dev/kvm`, so microVMs are out.
+
+**Image and toolchains.** Resolved per repo, first match wins:
+
+1. `LAMPLIGHTER.md` frontmatter → `sandbox: { image, setup, install, test }` (container-use's
+   fields, plus the test commands; each a string or a list);
+2. `.container-use/environment.json`;
+3. `.devcontainer/devcontainer.json` → its `image` only;
+4. group default, then the global default: the official **`buildpack-deps:bookworm-scm`** (Debian,
+   git, curl, CA certificates) plus **mise**, which installs each toolchain on demand at the
+   version the repo's own files name (`.nvmrc`, `engines`, `.python-version`, `go.mod`…). mise's
+   static binary is copied once from its official image into the shared mise volume, so there is
+   no image of our own. Cold, Node 22 took 36 s and Python 3.12 14 s; warm, 1–2 s. mise checks
+   the signatures or attestations of what it downloads.
+
+The install step (`npm ci`, `pip install -r …` into `.venv`, `go mod download`…) is detected and
+runs **lazily**: the prompt names it and the model runs it when it needs to; validation always
+does. `setup` runs as the sandbox user (no root). A repo's CI workflows are never run.
+All-in-one images (`codex-universal`: 43.7 GB, an hour to pull, root only, no licence) are
+something a repo may name, never a default.
+
+**Caches are volumes, not snapshots.** One shared volume for mise's toolchains and one per
+ecosystem for the package manager (`~/.npm`, pip…), each handed once to the sandbox uid by a
+helper with only `CAP_CHOWN`. Concurrent sessions share them: mise keeps lock files, and three
+sessions installing the same Node at once all worked (one run). Past `cache_max_gb` (checked
+daily) the package cache is emptied, the toolchains kept. `docker commit` is not used: it took 31
+minutes on a large image under the containerd store, and it does not capture volumes anyway.
+
+**Scanners and fix tools.** Detectors run in their **official images**, as the sandbox user,
+against the session's volume mounted read-only, before anything is installed (so `node_modules`
+and `.venv` are never scanned as the repo's own); the report is read from the container's output.
+A SARIF snippet is never copied into a finding (a secret scanner's snippet is the secret). Fix
+tools that call the package manager run **in the session container**, their static binary
+copied from the official image into `/opt/tools`: `osv-scanner fix --strategy=relock` needs
+`npm`. Measured: 23 vulnerabilities in acme-api, three bumps, tests green, re-scan clean.
+
+**Failures** follow invariant 6: Docker unreachable, an image that cannot be pulled, a registry
+down or a timeout make the round `blocked` and raise one alert. Head red where base was green makes
+the proposal `failed`.
+
+**Fallback.** `sandbox.enabled: false` (an install without the proxy, or an upgrade from 0.6)
+keeps v1's in-process mode: nothing of a repository runs, image detectors fall back to built-ins,
+and fixes cannot refresh a lockfile (invariant 10). Enabled but unreachable is not a fallback: the
+round is blocked with an alert, so a broken proxy is not mistaken for v1.
+
+**Where this stands.** It matches self-hosted CI runners (act_runner, the Forgejo runner, GitLab's
+Docker executor, Renovate): a container per job, a small base, toolchains on demand, caches on
+volumes. It is stricter than they usually are on privileges (no sudo, no capabilities, no token
+in the job). It is one step below hosted coding agents (Copilot, Codex, Jules), which add a
+**microVM** and an **egress allowlist**. Both are later hardening (§13), not prerequisites.
 
 ## 11. Activity, chat and MCP
 
@@ -455,9 +581,10 @@ below the first row.
 
 ## 13. Open questions
 
-1. **A runner for tests and scanners**: a credential-free sidecar that runs commands in a
-   worktree copy (tests, `npm install` for lockfile fixes, semgrep, knip). It unlocks mechanical
-   validation (§7.3 step 1) and lockfile regeneration for `cve`/`deps` fixes.
+1. **Sandbox hardening, later** (§10.1): an egress allowlist (registries, GitHub, mise's sources);
+   gVisor where a box can install it; a proxy that also filters request bodies, so "no host bind"
+   does not rest on Lamplighter alone; an LRU for the caches instead of emptying them; fixes for
+   ecosystems `osv-scanner fix` cannot relock (PyPI not tried); `setup` steps that need root.
 2. **Concurrency at 200 repos** is `schedule.slots` against one shared backend; the claude-code
    container advises a ceiling (`check_status.recommendedMaxConcurrent`) that v1 does not read yet.
 3. **Monorepos with submodules** (yundera-root, meta-root-v2): proposed rule is that each submodule

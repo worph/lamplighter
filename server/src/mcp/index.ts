@@ -8,7 +8,7 @@ import { SETTING, getSetting } from '../settings.js'
 import { ADMIN_TOOLS, asText } from '../tools/admin.js'
 import { execTool, WORKSPACE_TOOLS } from '../tools/workspace.js'
 
-export const VERSION = '0.6.2'
+export const VERSION = '0.7.0'
 
 const ADMIN_INSTRUCTIONS = `Lamplighter keeps a fleet of git repositories maintained: it runs checks (docs, cve, deps,
 dead-code, refactor, quality, patterns, architecture, security) as rounds, records findings, and prepares

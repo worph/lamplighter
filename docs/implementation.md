@@ -169,9 +169,16 @@ docker exec lamplighter-dev seed-fixtures /DATA/fixtures
 
   Then seed `acme-web` there with `GITEA_URL=http://gitea:3000 GITEA_USER=… GITEA_TOKEN=… seed-fixtures /DATA/fixtures`.
   In Lamplighter, add a `gitea` forge with base URL `http://gitea:3000`, then a credential on it with that username and token.
-- **Fixture forge**: add a `git` forge with base `/DATA/fixtures`, then repos `acme-api` and
-  `tiny-cli`. They carry a stale README, an unused file, vulnerable lodash/minimist/express
-  versions, an `eval()` on request input and a swallowed error.
+- **Fixture forge**: add a `git` forge with base `/DATA/fixtures`, then repos `acme-api`,
+  `tiny-cli` and `py-svc`. They carry a stale README, an unused file, vulnerable
+  lodash/minimist/express and requests/PyYAML versions, an `eval()` on request input and a
+  swallowed error; `acme-api` (a real lockfile, `node --test`) and `py-svc` (pytest) have test
+  suites for the sandbox to validate fixes with.
+- **Sandbox**: the dev stack runs `lamplighter-docker` (docker-socket-proxy on the host's socket)
+  and seeds `sandbox.enabled: true`. Settings → Sandbox → **Test** pulls the base image and mise
+  and creates the network and volumes (a few minutes the first time). Sandboxes run as uid 10001:
+  on a Docker Desktop disk past ext4's root reserve, root can still write but that uid gets
+  `ENOSPC`, so run them against another engine (a test box's socket over SSH) if that happens.
 - **MCP**: the `mcp` profile announces `lamplighter` on the local Beacon (`mcp-net`); the tools
   appear as `lamplighter__*`.
 
@@ -235,7 +242,7 @@ Releases: tag, build and push `ghcr.io/worph/lamplighter:<v>`, then bump the ima
 
 | Item | Why |
 |---|---|
-| A credential-free **runner** sidecar (tests, package managers, scanners in a worktree copy) | mechanical validation (architecture §7.3 step 1); lockfile regeneration for `cve`/`deps` fixes; semgrep/knip as detector hints |
+| Sandbox hardening (architecture §13.1): egress allowlist, gVisor, body-filtering proxy, cache LRU | the sandbox is at self-hosted-CI level; hosted coding agents add these |
 | GitHub **private advisory** delivery for sensitive fixes on public repos | replaces "held + typed confirmation" |
 | **Batching** (`weekly` cleanup PRs, one commit per finding) | review attention at fleet scale |
 | Read `check_status.recommendedMaxConcurrent` | slots that follow the shared backend's memory |

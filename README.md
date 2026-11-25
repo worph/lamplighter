@@ -85,7 +85,8 @@ Where only a model can see it, the model does both, and the result is held to th
 3. **Proposals.** When a check's delivery is anything but `report`, a fixing session writes a
    change in a throwaway worktree and Lamplighter commits it. **The session that wrote a fix
    never judges it**: a fresh, independent session reviews the diff and must find the issues gone
-   and nothing new. (Running the repo's build and tests needs a runner, which is later work.)
+   and nothing new. With the sandbox on, the fix is also judged by the repository's own tests, run on
+   the base and on the proposal in fresh containers, and by the scanners run again on both.
 4. **Delivery.** Per check, per repo group, per repo, for every check alike: `report` (the round's
    report lands in Activity, no code), `branch`, `pr` or `push`, each
    with an *auto-submit* switch saying whether a person approves first. Bare git has no PRs, so
@@ -160,4 +161,5 @@ points at the box's Beacon and claude-code out of the box. Details in
 | | Contents |
 |---|---|
 | **v1** ✅ | GitHub / Gitea / bare git, bare clones, polling + webhooks + loop guard; nine check files; OSV and npm detectors; LLM review, fix and independent validation sessions through a workspace toolset; claude-code, OpenAI-compatible and text-only drivers; findings with dedup and dismissal memory; delivery report / branch / PR / push with approve, reject, merge, revert and PR follow-up; scheduler with tiers, debounce, slots, session budget and attention caps; Chat, Repos, Activity, Settings; admin MCP |
-| **next** | a credential-free runner (tests, package managers, scanners) → mechanical validation and lockfile regeneration for `cve`/`deps` fixes; GitHub private advisories; batching of cleanup PRs; web push; policy-from-overrides review; onboarding the ~200-repo fleet in waves |
+| **0.7** ✅ | the session sandbox: a credential-free container per session (docker-socket-proxy, buildpack-deps + mise, caches on volumes) with a `run` tool; mechanical validation on base and proposal; scanners in their official images (osv-scanner, Gitleaks) with SARIF; re-scan of every proposal; `osv-scanner fix` in fixing sessions, so `cve`/`deps` fixes refresh the lockfile |
+| **next** | sandbox hardening (egress allowlist, gVisor); GitHub private advisories; batching of cleanup PRs; web push; policy-from-overrides review; onboarding the ~200-repo fleet in waves |
