@@ -64,6 +64,7 @@ async function main() {
 
   await f.listen({ port: env.port, host: env.host })
   logEvent(db, { code: 'STARTED', message: `Lamplighter ${VERSION} started; inference ${config.current.inference.driver} at ${config.current.inference.url}` })
+  if (checks.upgraded.length) logEvent(db, { code: 'CHECKS_UPGRADED', message: `check files updated to this release's seeds (they were unedited): ${checks.upgraded.join(', ')}` })
   scheduler.start()
 
   const housekeeping = async (what: 'reap' | 'trim') => {

@@ -130,6 +130,30 @@ describe('scanner output', () => {
   })
 })
 
+describe('seed upgrades', () => {
+  const seed = fileURLToPath(new URL('../../seed', import.meta.url))
+
+  it('replace an unedited older seed, and leave an edited one alone', async () => {
+    const { execFileSync: run } = await import('node:child_process')
+    const old = run('git', ['show', 'v0.6.2:seed/checks/cve.md'], { cwd: seed }).toString()
+    const dir = write(tmp(), { 'cve.md': old, 'deps.md': `${run('git', ['show', 'v0.6.2:seed/checks/deps.md'], { cwd: seed })}\nOur own rule.\n` })
+    const checks = new Checks(dir, seed)
+    expect(checks.upgraded).toEqual(['cve.md'])
+    expect(checks.get('cve')!.revision).toBe(3)
+    expect(checks.get('deps')!.prompt).toMatch(/Our own rule/)
+    expect(new Checks(dir, seed).upgraded).toEqual([]) // once upgraded, nothing more to do
+  })
+
+  it('list every shipped seed in history.json (a release that changes one adds its hash)', async () => {
+    const { createHash } = await import('node:crypto')
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const history = JSON.parse(readFileSync(join(seed, 'checks', 'history.json'), 'utf8')) as Record<string, string[]>
+    for (const f of readdirSync(join(seed, 'checks')).filter((f) => f.endsWith('.md'))) {
+      expect(history[f], f).toContain(createHash('sha256').update(readFileSync(join(seed, 'checks', f))).digest('hex'))
+    }
+  })
+})
+
 describe('the run tool', () => {
   function session(ws: Workspace, runTimeoutS = 600): Session {
     return new SessionRegistry().open({

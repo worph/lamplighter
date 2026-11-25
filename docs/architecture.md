@@ -120,7 +120,10 @@ one that may push there, and never handed to the model (invariant 1).
 ## 5. Checks are files
 
 `data/checks/<kind>.md`, frontmatter plus a prompt body, on the volume, not in the image (the
-lesson from Touchstone's rubric: a copy in the image drifts from every box).
+lesson from Touchstone's rubric: a copy in the image drifts from every box). Seeded from the
+image on first boot. At each boot, a file still byte-identical to a seed some release shipped
+(`seed/checks/history.json`) is replaced by this release's seed; a file someone edited is theirs
+and stays (since 0.7.1).
 
 ```markdown
 ---

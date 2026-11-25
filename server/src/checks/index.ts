@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import matter from 'gray-matter'
@@ -6,7 +7,8 @@ import { DELIVERIES, type CheckSettings, type Config } from '../config/index.js'
 
 /**
  * A check is a file on the volume (`checks/<kind>.md`): frontmatter for the machine, the body is
- * the prompt. Seeded on first boot, never overwritten — the volume copy is the live one.
+ * the prompt. Seeded on first boot; the volume copy is the live one. A file an operator edited is
+ * never overwritten; one still identical to an older release's seed is upgraded at boot.
  */
 
 export const CHECK_KINDS = [
@@ -61,16 +63,48 @@ const frontSchema = z.object({
 export type CheckDef = z.infer<typeof frontSchema> & { prompt: string; file: string }
 export type ResolvedSettings = Required<CheckSettings>
 
+function sha256(b: Buffer): string {
+  return createHash('sha256').update(b).digest('hex')
+}
+
+/**
+ * `seed/checks/history.json`: every version of each seed file any release shipped, by sha256.
+ * A release that changes a seed adds the new hash (a test fails until it does).
+ */
+function seedHistory(seed: string): Record<string, string[]> {
+  try {
+    return JSON.parse(readFileSync(join(seed, 'history.json'), 'utf8')) as Record<string, string[]>
+  } catch {
+    return {}
+  }
+}
+
 export class Checks {
   private defs = new Map<CheckKind, CheckDef>()
   errors: string[] = []
+
+  /** Check files replaced at boot by a newer seed, because they were an untouched older seed. */
+  upgraded: string[] = []
 
   constructor(private readonly dir: string, seedDir: string) {
     mkdirSync(dir, { recursive: true })
     const seed = join(seedDir, 'checks')
     if (existsSync(seed)) {
+      const history = seedHistory(seed)
       for (const f of readdirSync(seed)) {
-        if (f.endsWith('.md') && !existsSync(join(dir, f))) copyFileSync(join(seed, f), join(dir, f))
+        if (!f.endsWith('.md')) continue
+        const dest = join(dir, f)
+        if (!existsSync(dest)) {
+          copyFileSync(join(seed, f), dest)
+          continue
+        }
+        // A file still byte-identical to a seed some release shipped was never edited: the newer
+        // seed may replace it. An edited one is the operator's, and stays.
+        const current = sha256(readFileSync(dest))
+        if (current !== sha256(readFileSync(join(seed, f))) && history[f]?.includes(current)) {
+          copyFileSync(join(seed, f), dest)
+          this.upgraded.push(f)
+        }
       }
     }
     this.reload()

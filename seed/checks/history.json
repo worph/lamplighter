@@ -1,0 +1,35 @@
+{
+  "architecture.md": [
+    "5cbd156773a8d3432a08314c963b2c5b186d45b3dec7143d22930882605d2dbf",
+    "eb32e596003d699ff032bf3a2241d2ed2942a28c6816e78577905a649acb1872"
+  ],
+  "cve.md": [
+    "72a8bed723314be96d696d9c74645b6dd7e7b9ec31ce60e0ab1ce52ad0842a42",
+    "ee002c7bd0933b5727426a306cc9ac240b783bbe2696c34e05dd9590cb09bcf9",
+    "781789f65d02765fe049544903fa963e97a73648ec783793ca85b061422b24eb"
+  ],
+  "dead-code.md": [
+    "68e609f0a25b01cbcf277f0bc4ee3f8aa215d8b62a21df83279d963cbb23166b"
+  ],
+  "deps.md": [
+    "f73aaa95fdaec3092d26e4886ff465b02f27fe6e6fc3b24686bd7d0d447c50c9",
+    "0cdfaca9b9e0ae8710bdfeb9d813d032f4aa6eea8b67ca4bb53393b96e571ee2",
+    "ecc523aed6e2c0ae6eb3f33763c1ab0d821ab82eed87dfce533f0231271bcc1d"
+  ],
+  "docs.md": [
+    "15bf47fd96c95aaf35a48966d947402bcdb24b7962eade144765654c338cd031"
+  ],
+  "patterns.md": [
+    "b4beac4108a4eb54374ee3d1bef67c5af0bb3a2b300f05e7819af1e117adb837"
+  ],
+  "quality.md": [
+    "bb99bff095ac8819dde01816672fd8a2af4d4f3dd0927a8ede61f3a672688182"
+  ],
+  "refactor.md": [
+    "33cb419e2079c1ff49887660b92d29032390d1bb2e54a267eae5ed6d92b89b44"
+  ],
+  "security.md": [
+    "eec8cffdf8e6648af532e27455bad207fc8c71a7908c6faf5d9f8b38b82da22c",
+    "c2746f149c171591388c66657931168ab318ac78ed10f291667dc6b5f7b8f790"
+  ]
+}
