@@ -41,10 +41,6 @@ export class Mirrors {
     return next
   }
 
-  ensure(repo: RepoRow): Promise<string> {
-    return this.serial(repo, () => this.ensureNow(repo))
-  }
-
   private async ensureNow(repo: RepoRow): Promise<string> {
     const dir = this.gitDir(repo)
     if (!existsSync(join(dir, 'HEAD'))) {
