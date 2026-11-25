@@ -1,13 +1,13 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, posix } from 'node:path'
+import { basename, join, posix } from 'node:path'
 import type { SandboxConfig } from '../config/index.js'
 import { git } from '../forges/gitcli.js'
 import { lexicalRel, ToolInputError, type Workspace } from '../sessions/workspace.js'
 import { ensureInfra } from './infra.js'
 import { repoEnv, type RepoEnv } from './repo.js'
 import { packTar, SandboxError, type ExecResult, type SandboxRuntime } from './runtime.js'
-import { LABEL, REPO_DIR, sessionSpec, workVolume } from './spec.js'
+import { LABEL, REPO_DIR, sessionSpec, sourceSpec, workVolume } from './spec.js'
 
 /**
  * A session's sandbox: one container for the session's whole life, holding a clone of the
@@ -145,3 +145,23 @@ export async function openSandbox(rt: SandboxRuntime, cfg: SandboxConfig, o: { s
   }
 }
 
+
+const TOOL_MAX_BYTES = 400 * 1024 * 1024
+
+/** Copy each fix tool's static binary out of its official image onto the session's PATH (/opt/tools). */
+export async function installFixTools(rt: SandboxRuntime, cfg: SandboxConfig, ws: SandboxWorkspace, tools: { image: string; path: string }[]): Promise<string[]> {
+  const files: { name: string; content: Buffer }[] = []
+  for (const t of tools) {
+    await rt.ensureImage(t.image)
+    const source = await rt.create(sourceSpec(cfg, { image: t.image }))
+    try {
+      const content = await rt.getFile(source, t.path, TOOL_MAX_BYTES)
+      if (!content) throw new SandboxError(`${t.image} has no ${t.path}`, 'image')
+      files.push({ name: basename(t.path), content })
+    } finally {
+      await rt.remove(source)
+    }
+  }
+  await ws.addTools(files)
+  return files.map((f) => f.name)
+}

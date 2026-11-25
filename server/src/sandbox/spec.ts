@@ -14,6 +14,7 @@ export const CACHE_VOLUME = 'lamplighter-cache'
 export const REPO_DIR = '/work/repo'
 export const TOOLS_DIR = '/opt/tools'
 const LOG_MAX = '10m'
+const REPORT_LOG_MAX = '64m'
 
 export function workVolume(sessionId: string): string {
   return `lamplighter-s-${sessionId.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}`
@@ -84,7 +85,8 @@ export function detectorSpec(cfg: SandboxConfig, o: { sessionId: string; image: 
     Env: ['HOME=/tmp'],
     WorkingDir: REPO_DIR,
     Labels: { [LABEL]: o.sessionId },
-    HostConfig: { ...hardened(cfg, cfg.network), Mounts: [volume(workVolume(o.sessionId), '/work', true)] },
+    // The report is read from the container's log: a large SARIF must not be cut by the log cap.
+    HostConfig: { ...hardened(cfg, cfg.network), LogConfig: { Type: 'json-file', Config: { 'max-size': REPORT_LOG_MAX, 'max-file': '1' } }, Mounts: [volume(workVolume(o.sessionId), '/work', true)] },
   }
 }
 

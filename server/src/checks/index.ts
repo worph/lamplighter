@@ -14,13 +14,39 @@ export const CHECK_KINDS = [
 ] as const
 export type CheckKind = (typeof CHECK_KINDS)[number]
 
+export const BUILTIN_DETECTORS = ['osv', 'npm-outdated'] as const
+export type BuiltinDetector = (typeof BUILTIN_DETECTORS)[number]
+
+/**
+ * A scanner in its official image, run in the sandbox against the session's clone (read-only,
+ * before any install). `run` is the argv after the image's entrypoint; the repository is at
+ * /work/repo. Without the sandbox, `fallback` (a built-in) runs instead, or nothing.
+ */
+export const imageDetectorSchema = z.object({
+  name: z.string().min(1),
+  image: z.string().min(1),
+  run: z.array(z.string()),
+  format: z.enum(['sarif', 'osv-json']),
+  /** The finding category; default: the check's first. */
+  category: z.string().optional(),
+  /** Exit codes that mean "ran and found something", besides 0 (osv-scanner and gitleaks use 1). */
+  ok_exit: z.array(z.number().int()).default([1]),
+  fallback: z.enum(BUILTIN_DETECTORS).optional(),
+})
+export type ImageDetector = z.infer<typeof imageDetectorSchema>
+export type DetectorDef = BuiltinDetector | ImageDetector
+
+/** A static binary copied out of an official image onto the fixing session's PATH (§10.1). */
+export const fixToolSchema = z.object({ image: z.string().min(1), path: z.string().min(1) })
+
 const frontSchema = z.object({
   kind: z.enum(CHECK_KINDS),
   title: z.string(),
   revision: z.number().int().min(1),
   scopes: z.array(z.enum(['diff', 'full'])).min(1),
   agent: z.enum(['none', 'review']),
-  detectors: z.array(z.enum(['osv', 'npm-outdated'])).default([]),
+  detectors: z.array(z.union([z.enum(BUILTIN_DETECTORS), imageDetectorSchema])).default([]),
+  fix_tools: z.array(fixToolSchema).default([]),
   categories: z.array(z.string()).min(1),
   sensitive: z.enum(['never', 'always']).default('never'),
   defaults: z.object({

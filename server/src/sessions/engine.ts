@@ -1,5 +1,4 @@
 import { resolveSettings, type CheckDef } from '../checks/index.js'
-import { runDetectors } from '../checks/detectors/index.js'
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
@@ -15,8 +14,10 @@ import { getGroup, getRepo, parseSettings, type RepoRow } from '../repos/registr
 import { authorPrompt, confirmPrompt, roundPrompt } from './prompt.js'
 import type { Session } from './session.js'
 import { execTool, toolSpecs } from '../tools/workspace.js'
-import { isSandbox, openWorkspace, SandboxError, type SessionWorkspace } from '../sandbox/index.js'
-import { mechanical, renderMechanical } from '../sandbox/validate.js'
+import { detect, hasImageDetectors } from '../sandbox/detect.js'
+import { isSandbox, openWorkspace, SandboxError, sandboxRuntime, type SessionWorkspace } from '../sandbox/index.js'
+import { mechanical, renderMechanical, renderScan, scanCheck } from '../sandbox/validate.js'
+import { installFixTools } from '../sandbox/workspace.js'
 import { afterReady, failProposal, getProposal, type ProposalRow } from '../delivery/index.js'
 
 export interface QueueRow {
@@ -99,6 +100,11 @@ function infraAlert(app: App, err: unknown) {
   }
 }
 
+function sandboxOf(app: App) {
+  const rt = sandboxRuntime(app)
+  return rt ? { rt, cfg: app.config.current.sandbox } : undefined
+}
+
 /** What the prompt says about the sandbox, when the session has one. */
 function sandboxInfo(ws: SessionWorkspace) {
   return isSandbox(ws) ? { install: ws.env.install, test: ws.env.test } : undefined
@@ -137,18 +143,20 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
     let recorded
     let narrative: string
     let usage
+    if (def.agent !== 'none' || hasImageDetectors(def)) ws = await openWorkspace(app, { sessionId: id, worktree, head })
+    // Before the model or anything else touches the clone (§10.1: nothing installed yet).
+    const det = def.detectors.length ? await detect(def, worktree, ws, sandboxOf(app)) : undefined
     if (def.agent === 'none') {
-      const det = await runDetectors(def.detectors, worktree)
-      recorded = det.findings
-      narrative = det.notes.map((n) => `- ${n}`).join('\n')
+      recorded = det!.findings
+      narrative = det!.notes.map((n) => `- ${n}`).join('\n')
     } else {
       const group = getGroup(app.db, repo.group_id)
-      ws = await openWorkspace(app, { sessionId: id, worktree, head })
+      ws ??= await openWorkspace(app, { sessionId: id, worktree, head })
       session = app.sessions.open({
         id, kind: 'round', repo, check: def, worktree, ws, head, base: scope === 'diff' ? job.base_sha! : undefined, allowWrite: false,
         timeoutS: app.config.current.inference.timeout_s, runTimeoutS: app.config.current.sandbox.run_timeout_s,
       })
-      const prompt = roundPrompt({ repo, check: def, worktree, sandbox: sandboxInfo(ws), scope, base: session.base, head, groupPolicy: group.policy, existing: existingFindings(app, repo.key, def.kind) })
+      const prompt = roundPrompt({ repo, check: def, worktree, sandbox: sandboxInfo(ws), hints: det, scope, base: session.base, head, groupPolicy: group.policy, existing: existingFindings(app, repo.key, def.kind) })
       const result = await drive(app, session, prompt, id)
       usage = result.usage
       recorded = session.findings
@@ -278,6 +286,8 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
     insertRound(app, { id: roundId, repo: repo.key, def, kind: 'author', scope: 'full', head: base, proposal: pid, trigger: job.trigger })
     worktree = await app.mirrors.addWorktree(repo, roundId, base)
     ws = await openWorkspace(app, { sessionId: roundId, worktree, head: base })
+    const sb = sandboxOf(app)
+    if (sb && isSandbox(ws) && def.fix_tools.length) await installFixTools(sb.rt, sb.cfg, ws, def.fix_tools)
     session = app.sessions.open({
       id: roundId, kind: 'author', repo, check: def, worktree, ws, head: base, allowWrite: true,
       timeoutS: app.config.current.inference.timeout_s, runTimeoutS: app.config.current.sandbox.run_timeout_s,
@@ -356,6 +366,18 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
       failProposal(app, p.id, `validation: ${verdict}`)
       return
     }
+    // The proposal's own check, plus cve whatever the kind: a refactor can pull in a dependency.
+    const cve = app.checks.get('cve')
+    const scanned = [def, ...(cve && cve.kind !== def.kind ? [cve] : [])]
+    const scan = await scanCheck(app, repo, scanned, p.base_sha, p.head_sha!, addressed.map((f) => ({ check: f.check_kind, category: f.category, anchor: f.anchor })))
+    const scanReport = `## Scanners\n\n${renderScan(scan)}`
+    if (!scan.ok) {
+      const verdict = [scan.unfixed.length ? `still reported: ${scan.unfixed.join('; ')}` : '', scan.introduced.length ? `new: ${scan.introduced.join('; ')}` : ''].filter(Boolean).join(' · ')
+      app.db.prepare('UPDATE proposals SET validation = ?, updated_at = ? WHERE id = ?').run(JSON.stringify({ ok: false, round: roundId, verdict, remaining: [], mechanical: tests, scan }), now(), p.id)
+      endRound(app, roundId, { status: 'done', summary: 'scanners disagree', report: `# Validation of ${p.id}\n\n${verdict}\n\n${testsReport}\n\n${scanReport}` })
+      failProposal(app, p.id, `validation: ${verdict}`)
+      return
+    }
     worktree = await app.mirrors.addWorktree(repo, roundId, p.head_sha!)
     ws = await openWorkspace(app, { sessionId: roundId, worktree, head: p.head_sha! })
     session = app.sessions.open({
@@ -366,12 +388,12 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
     const remaining = session.findings
     const ok = remaining.length === 0 && session.done?.status !== 'cannot'
     const verdict = session.done?.text ?? result.text
-    const validation = { ok, round: roundId, verdict, remaining, mechanical: tests }
+    const validation = { ok, round: roundId, verdict, remaining, mechanical: tests, scan }
     app.db.prepare('UPDATE proposals SET validation = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(validation), now(), p.id)
     endRound(app, roundId, {
       status: 'done',
       summary: ok ? 'validated' : `${remaining.length} problem(s) remain`,
-      report: `# Validation of ${p.id}\n\n${verdict}\n\n${remaining.map((f) => `- **${f.title}** (${f.category} @ ${f.anchor})\n  ${f.body}`).join('\n')}\n\n${testsReport}`,
+      report: `# Validation of ${p.id}\n\n${verdict}\n\n${remaining.map((f) => `- **${f.title}** (${f.category} @ ${f.anchor})\n  ${f.body}`).join('\n')}\n\n${testsReport}\n\n${scanReport}`,
       usage: result.usage,
     })
     if (!ok) {

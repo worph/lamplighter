@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { Checks } from './checks/index.js'
+import { fromOsvJson, fromSarif } from './checks/detectors/formats.js'
 import { sandboxSchema } from './config/index.js'
+import { fileURLToPath } from 'node:url'
 import { SessionRegistry, type Session } from './sessions/session.js'
 import { LocalWorkspace, lexicalRel, type Workspace } from './sessions/workspace.js'
 import { execTool, toolSpecs } from './tools/workspace.js'
@@ -100,6 +103,33 @@ describe('repository environment', () => {
   })
 })
 
+describe('scanner output', () => {
+  it('reads SARIF without ever copying a snippet, anchored by path and rule', () => {
+    const sarif = JSON.stringify({ runs: [{ results: [
+      { ruleId: 'aws-access-token', level: 'error', message: { text: 'aws-access-token has detected secret for file /work/repo/creds.txt.' }, locations: [{ physicalLocation: { artifactLocation: { uri: '/work/repo/creds.txt' }, region: { startLine: 1, snippet: { text: 'AKIAIOSFODNN7EXAMPLQ' } } } }] },
+      { ruleId: 'aws-access-token', locations: [{ physicalLocation: { artifactLocation: { uri: '/work/repo/creds.txt' }, region: { startLine: 9 } } }] },
+    ] }] })
+    const r = fromSarif(sarif, { category: 'secret-in-code', root: '/work/repo', tool: 'gitleaks' })
+    expect(r.findings).toHaveLength(1) // one finding per file and rule, whatever the line
+    expect(r.findings[0]).toMatchObject({ anchor: 'creds.txt#aws-access-token', severity: 'major', category: 'secret-in-code' })
+    expect(JSON.stringify(r)).not.toMatch(/AKIA|\/work\/repo/)
+  })
+
+  it('reads osv-scanner JSON with the built-in detector\'s anchors', () => {
+    const json = JSON.stringify({ results: [{ source: { path: '/work/repo/package-lock.json' }, packages: [{ package: { name: 'lodash', version: '4.17.15', ecosystem: 'npm' }, groups: [{ ids: ['GHSA-x'], max_severity: '9.1' }], vulnerabilities: [{ id: 'GHSA-x', summary: 'proto pollution' }] }] }] })
+    const r = fromOsvJson(json, { category: 'vulnerable-dependency', tool: 'osv-scanner' })
+    expect(r.findings[0]).toMatchObject({ anchor: 'npm:lodash@4.17.15', severity: 'critical' })
+    expect(fromOsvJson('', { category: 'c', tool: 'osv-scanner' }).notes[0]).toMatch(/no package sources/)
+  })
+
+  it('ship check files that parse', () => {
+    const checks = new Checks(tmp(), fileURLToPath(new URL('../../seed', import.meta.url)))
+    expect(checks.errors).toEqual([])
+    expect(checks.get('cve')!.fix_tools[0]!.path).toBe('/osv-scanner')
+    expect(checks.get('security')!.detectors).toEqual([expect.objectContaining({ name: 'gitleaks', format: 'sarif' })])
+  })
+})
+
 describe('the run tool', () => {
   function session(ws: Workspace, runTimeoutS = 600): Session {
     return new SessionRegistry().open({
@@ -185,5 +215,32 @@ describe.skipIf(!DOCKER)('a real sandbox', () => {
 
     const slow = await ws.exec('sleep 30', { timeoutMs: 2_000, maxBytes: 1000 })
     expect(slow.timedOut).toBe(true)
+  })
+
+  it('runs scanners in their own images and fix tools in the session', { timeout: 900_000 }, async () => {
+    const { detect } = await import('./sandbox/detect.js')
+    const { installFixTools } = await import('./sandbox/workspace.js')
+    const checks = new Checks(tmp(), fileURLToPath(new URL('../../seed', import.meta.url)))
+    const root = write(tmp(), {
+      'package.json': JSON.stringify({ name: 'fx', version: '1.0.0', dependencies: { lodash: '4.17.15' } }),
+      'package-lock.json': JSON.stringify({ name: 'fx', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'fx', version: '1.0.0', dependencies: { lodash: '4.17.15' } }, 'node_modules/lodash': { version: '4.17.15', resolved: 'https://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz' } } }),
+    })
+    const g = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: root }).toString().trim()
+    g('init', '-q', '-b', 'main')
+    writeFileSync(join(root, 'creds.txt'), `${'AKIA'}IOSFODNN7EXAMPLQ\n`)
+    g('add', '-A'); g('commit', '-qm', 'oops')
+    g('rm', '-q', 'creds.txt'); g('commit', '-qm', 'remove it') // gone from the tree, still in history
+    const sb = await openSandbox(rt, cfg, { sessionId: `d${Date.now().toString(36)}`, worktree: root, head: g('rev-parse', 'HEAD') })
+    try {
+      const cve = await detect(checks.get('cve')!, root, sb, { rt, cfg })
+      expect(cve.findings.map((f) => f.anchor)).toContain('npm:lodash@4.17.15')
+      const sec = await detect(checks.get('security')!, root, sb, { rt, cfg })
+      expect(sec.findings.map((f) => f.anchor)).toContain('creds.txt#aws-access-token')
+      expect(JSON.stringify(sec)).not.toMatch(/AKIAIOSFODNN7EXAMPLQ/)
+      expect(await installFixTools(rt, cfg, sb, checks.get('cve')!.fix_tools)).toEqual(['osv-scanner'])
+      expect((await sb.exec('osv-scanner --version', { timeoutMs: 30_000, maxBytes: 2000 })).output).toMatch(/osv-scanner version/)
+    } finally {
+      await sb.dispose()
+    }
   })
 })

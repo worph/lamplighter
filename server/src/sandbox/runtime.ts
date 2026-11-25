@@ -163,6 +163,21 @@ export function firstFile(stream: Readable, maxBytes: number): Promise<{ name: s
   })
 }
 
+/** Split Docker's multiplexed log stream (8-byte frame headers: stream, 3 zero bytes, length). */
+export function demux(raw: Buffer): { stdout: string; stderr: string } {
+  const out: Buffer[] = []
+  const err: Buffer[] = []
+  let i = 0
+  while (i + 8 <= raw.length) {
+    const kind = raw[i]!
+    const len = raw.readUInt32BE(i + 4)
+    const frame = raw.subarray(i + 8, i + 8 + len)
+    ;(kind === 2 ? err : out).push(frame)
+    i += 8 + len
+  }
+  return { stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }
+}
+
 export class SandboxRuntime {
   private client?: Docker
 
@@ -255,6 +270,28 @@ export class SandboxRuntime {
         new Promise((_, reject) => setTimeout(() => reject(new SandboxError('helper container timed out', 'container')), timeoutMs)),
       ])) as { StatusCode: number }
       return r.StatusCode
+    } finally {
+      await c.remove({ force: true }).catch(() => undefined)
+    }
+  }
+
+  /** Run a container to the end (a scanner) and return its exit code and output. Removed afterwards. */
+  async runCapture(spec: Docker.ContainerCreateOptions, timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
+    const id = await this.start(spec)
+    const c = this.docker.getContainer(id)
+    try {
+      let timedOut = false
+      const waited = await Promise.race([
+        api('wait', () => c.wait()) as Promise<{ StatusCode: number }>,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+      ])
+      if (!waited) {
+        timedOut = true
+        await c.kill().catch(() => undefined)
+      }
+      const raw = (await api('logs', () => c.logs({ stdout: true, stderr: true, follow: false }))) as unknown as Buffer
+      const { stdout, stderr } = demux(raw)
+      return { code: waited?.StatusCode ?? -1, stdout, stderr, timedOut }
     } finally {
       await c.remove({ force: true }).catch(() => undefined)
     }

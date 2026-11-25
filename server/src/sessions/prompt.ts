@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CheckDef } from '../checks/index.js'
+import type { DetectorResult } from '../checks/detectors/index.js'
 import type { FindingRow } from '../findings/index.js'
 import type { RepoRow } from '../repos/registry.js'
 
@@ -46,6 +47,22 @@ function sandboxBlock(sb: SandboxInfo | undefined, writes: boolean): string {
   ].join('\n')
 }
 
+const MAX_HINTS = 60
+
+/** Scanner output for a review check: leads to verify, not findings to copy. */
+function hintsBlock(h: DetectorResult | undefined): string {
+  if (!h || (!h.findings.length && !h.notes.length)) return ''
+  return [
+    '## Scanner results (hints)',
+    '',
+    'Deterministic scanners ran on this commit before you. Treat each result as a lead: check it in the code, record it only if it is real, and say in your report which you rejected.',
+    '',
+    ...h.findings.slice(0, MAX_HINTS).map((f) => `- ${f.title} — \`${f.anchor}\` (${f.severity})`),
+    ...(h.findings.length > MAX_HINTS ? [`- … and ${h.findings.length - MAX_HINTS} more`] : []),
+    ...h.notes.map((n) => `- _${n}_`),
+  ].join('\n')
+}
+
 function policyBlock(groupPolicy: string, repoPolicy: string): string {
   const p = [groupPolicy.trim() && `Group policy:\n${groupPolicy.trim()}`, repoPolicy.trim() && `Repository policy:\n${repoPolicy.trim()}`].filter(Boolean)
   return p.length ? `## Policy (the operator's rules — they win over general best practice)\n\n${p.join('\n\n')}` : ''
@@ -61,6 +78,7 @@ export interface RoundPromptArgs {
   check: CheckDef
   worktree: string
   sandbox?: SandboxInfo
+  hints?: DetectorResult
   scope: 'diff' | 'full'
   base?: string
   head: string
@@ -94,6 +112,7 @@ export function roundPrompt(a: RoundPromptArgs): string {
     policyBlock(a.groupPolicy, a.repo.policy),
     repoContext(a.worktree),
     sandboxBlock(a.sandbox, false),
+    hintsBlock(a.hints),
     existing,
     '',
     '## How to work',

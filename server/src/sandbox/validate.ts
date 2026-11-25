@@ -1,7 +1,9 @@
+import type { CheckDef } from '../checks/index.js'
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import type { RepoRow } from '../repos/registry.js'
-import { sandboxRuntime } from './index.js'
+import { detect } from './detect.js'
+import { openWorkspace, SandboxError, sandboxRuntime } from './index.js'
 import { repoEnv, type RepoEnv } from './repo.js'
 import { openSandbox } from './workspace.js'
 
@@ -147,4 +149,80 @@ export function renderMechanical(m: Mechanical): string {
   const rows = m.results.map((r) => `| \`${r.command}\` | ${cell(r.base)} | ${cell(r.head)}${r.reran ? ' · re-run' : ''} |`)
   const failed = m.results.filter((r) => r.regression).map((r) => `\n\n\`${r.command}\` on the proposal:\n\n\`\`\`\n${r.head.tail}\n\`\`\``)
   return [`| Command | Base | Proposal |`, `|---|---|---|`, ...rows].join('\n') + failed.join('')
+}
+
+/**
+ * Detector cross-check (§7.3 step 2): the scanners on base and on the proposal. A finding the
+ * proposal addresses that a scanner raised must be gone from the proposal — the deterministic
+ * proof of a CVE fix — and no scanner may raise anything on the proposal that it did not on base.
+ */
+export interface ScanCheck {
+  ran: boolean
+  ok: boolean
+  /** Addressed findings a scanner still reports on the proposal. */
+  unfixed: string[]
+  /** What a scanner reports on the proposal and not on base. */
+  introduced: string[]
+  notes: string[]
+}
+
+async function scanAt(app: App, repo: RepoRow, sha: string, checks: CheckDef[]) {
+  const id = newId('d')
+  const worktree = await app.mirrors.addWorktree(repo, id, sha)
+  const rt = sandboxRuntime(app)
+  try {
+    const ws = checks.some((c) => c.detectors.some((d) => typeof d !== 'string')) ? await openWorkspace(app, { sessionId: id, worktree, head: sha }) : undefined
+    try {
+      const found = new Map<string, string>()
+      const notes: string[] = []
+      for (const c of checks) {
+        const r = await detect(c, worktree, ws, rt ? { rt, cfg: app.config.current.sandbox } : undefined)
+        for (const f of r.findings) found.set(`${c.kind}|${f.category}|${f.anchor}`, f.title)
+        notes.push(...r.notes)
+      }
+      return { found, notes }
+    } finally {
+      await ws?.dispose?.()
+    }
+  } finally {
+    await app.mirrors.removeWorktree(repo, worktree)
+  }
+}
+
+export async function scanCheck(
+  app: App,
+  repo: RepoRow,
+  checks: CheckDef[],
+  base: string,
+  head: string,
+  addressed: { check: string; category: string; anchor: string }[],
+): Promise<ScanCheck> {
+  const withDetectors = checks.filter((c) => c.detectors.length)
+  if (!withDetectors.length) return { ran: false, ok: true, unfixed: [], introduced: [], notes: ['no detector applies'] }
+  let before: Awaited<ReturnType<typeof scanAt>>
+  let after: Awaited<ReturnType<typeof scanAt>>
+  try {
+    before = await scanAt(app, repo, base, withDetectors)
+    after = await scanAt(app, repo, head, withDetectors)
+  } catch (err) {
+    // The sandbox failing blocks the round (the caller); a registry or OSV hiccup in a built-in
+    // detector only means this step could not run — it says nothing about the change (invariant 6).
+    if (err instanceof SandboxError) throw err
+    return { ran: false, ok: true, unfixed: [], introduced: [], notes: [`the scanners could not run: ${(err as Error).message}`] }
+  }
+  const unfixed = addressed
+    .map((a) => `${a.check}|${a.category}|${a.anchor}`)
+    .filter((k) => before.found.has(k) && after.found.has(k))
+    .map((k) => after.found.get(k)!)
+  const introduced = [...after.found.entries()].filter(([k]) => !before.found.has(k)).map(([, title]) => title)
+  return { ran: true, ok: !unfixed.length && !introduced.length, unfixed, introduced, notes: [...new Set(after.notes)] }
+}
+
+export function renderScan(s: ScanCheck): string {
+  if (!s.ran) return `_Scanners not run: ${s.notes.join('; ')}._`
+  const lines = [s.ok ? 'The scanners report nothing new on the proposal, and every addressed finding they raised is gone.' : '']
+  if (s.unfixed.length) lines.push(`Still reported on the proposal:\n${s.unfixed.map((t) => `- ${t}`).join('\n')}`)
+  if (s.introduced.length) lines.push(`New on the proposal:\n${s.introduced.map((t) => `- ${t}`).join('\n')}`)
+  lines.push(`_${s.notes.join(' · ')}_`)
+  return lines.filter(Boolean).join('\n\n')
 }
