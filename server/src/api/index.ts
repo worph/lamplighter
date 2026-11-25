@@ -33,8 +33,15 @@ function lamps(app: App, repoKey: string): Record<string, { lamp: Lamp; open: nu
       .prepare("SELECT status, started_at FROM rounds WHERE repo_key = ? AND check_kind = ? AND kind = 'round' ORDER BY started_at DESC LIMIT 1")
       .get(repoKey, def.kind) as { status: string; started_at: string } | undefined
     const open = (app.db.prepare("SELECT COUNT(*) AS n FROM findings WHERE repo_key = ? AND check_kind = ? AND state IN ('open','proposed')").get(repoKey, def.kind) as { n: number }).n
+    // A running round has no verdict yet: the light is the last finished round's, so a check's first
+    // round shows unlit, not lit with nothing found.
+    const done = last?.status === 'running'
+      ? (app.db
+          .prepare("SELECT status FROM rounds WHERE repo_key = ? AND check_kind = ? AND kind = 'round' AND status != 'running' ORDER BY started_at DESC LIMIT 1")
+          .get(repoKey, def.kind) as { status: string } | undefined)
+      : last
     const enabled = settingsFor(app, repo, def).enabled
-    const lamp: Lamp = !enabled ? 'off' : !last ? 'unlit' : last.status === 'blocked' || last.status === 'failed' ? 'out' : last.status === 'running' ? (open ? 'dim' : 'lit') : open ? 'dim' : 'lit'
+    const lamp: Lamp = !enabled ? 'off' : !done ? 'unlit' : done.status === 'blocked' || done.status === 'failed' ? 'out' : open ? 'dim' : 'lit'
     out[def.kind] = { lamp, open, last: last?.started_at, status: last?.status }
   }
   return out
