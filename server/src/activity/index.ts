@@ -46,6 +46,16 @@ export function resolveFor(db: Db, refId: string, resolution: string, reason?: s
   db.prepare("UPDATE activity SET state = 'resolved', resolution = ?, reason = ?, resolved_at = ? WHERE ref_id = ? AND state = 'open'").run(resolution, reason ?? null, now(), refId)
 }
 
+/** Whether an alert with this code is open. */
+export function hasOpenAlert(db: Db, code: string): boolean {
+  return !!db.prepare("SELECT id FROM activity WHERE kind = 'alert' AND ref_id = ? AND state = 'open'").get(code)
+}
+
+/** One open alert per code, so an outage is one item rather than one per round. */
+export function openAlert(db: Db, code: string, title: string, body: string): void {
+  if (!hasOpenAlert(db, code)) addItem(db, { kind: 'alert', ref: code, title, body })
+}
+
 export function listItems(db: Db, f: { state?: 'open' | 'resolved'; repo?: string; limit?: number } = {}): ActivityRow[] {
   const where: string[] = []
   const args: unknown[] = []

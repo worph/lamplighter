@@ -1,3 +1,5 @@
+import { resolveSettings, type CheckDef } from '../checks/index.js'
+import type { App } from '../context.js'
 import type { Db } from '../db/index.js'
 import { now } from '../db/index.js'
 import { forgeApi, forgeRow } from '../forges/index.js'
@@ -102,4 +104,10 @@ export function parseSettings(json: string): Record<string, unknown> {
     // Unreadable settings count as none set: the defaults apply.
     return {}
   }
+}
+
+/** A repo's effective settings for one check: defaults, then config, then its group, then itself. */
+export function settingsFor(app: App, repo: RepoRow, def: CheckDef) {
+  const group = getGroup(app.db, repo.group_id)
+  return resolveSettings(def, app.config.current, parseSettings(group.settings_json), parseSettings(repo.settings_json))
 }

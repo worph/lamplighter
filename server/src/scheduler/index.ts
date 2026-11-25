@@ -1,10 +1,11 @@
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
-import { listRepos, getRepo, type RepoRow } from '../repos/registry.js'
-import { alert, runAuthor, runRound, settingsFor, type QueueRow } from '../sessions/engine.js'
+import { listRepos, getRepo, settingsFor, type RepoRow } from '../repos/registry.js'
+import { runAuthor, runRound, type QueueRow } from '../sessions/engine.js'
 import { pollPullRequests, retryAutoSubmits } from '../delivery/index.js'
 import { checkAllForges } from '../forges/auth.js'
+import { openAlert } from '../activity/index.js'
 
 /**
  * One queue, served in order (Touchstone's model): foreground (what a person asked for, first in
@@ -225,7 +226,7 @@ export class Scheduler {
     } catch (err) {
       this.app.db.prepare("UPDATE queue SET state = 'failed' WHERE id = ?").run(j.id)
       if (!(err instanceof Error && err.name === 'InferenceError')) {
-        alert(this.app, `job.${j.check_kind}`, `A ${j.job} job failed`, `${j.repo_key} / ${j.check_kind}: ${(err as Error).message}`)
+        openAlert(this.app.db, `job.${j.check_kind}`, `A ${j.job} job failed`, `${j.repo_key} / ${j.check_kind}: ${(err as Error).message}`)
       }
     } finally {
       // Done rows are history the queue view does not need beyond a day.

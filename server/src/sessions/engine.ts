@@ -1,4 +1,4 @@
-import { resolveSettings, type CheckDef } from '../checks/index.js'
+import type { CheckDef } from '../checks/index.js'
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
@@ -9,8 +9,8 @@ import { git } from '../forges/gitcli.js'
 import { ownBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
 import { driverFor } from '../inference/index.js'
 import { InferenceError } from '../inference/types.js'
-import { addItem, openCount } from '../activity/index.js'
-import { getGroup, getRepo, parseSettings, type RepoRow } from '../repos/registry.js'
+import { addItem, openAlert, openCount } from '../activity/index.js'
+import { getGroup, getRepo, settingsFor, type RepoRow } from '../repos/registry.js'
 import { authorPrompt, confirmPrompt, roundPrompt } from './prompt.js'
 import type { Session } from './session.js'
 import { execTool, toolSpecs } from '../tools/workspace.js'
@@ -34,11 +34,6 @@ export interface QueueRow {
   state: string
   created_at: string
   started_at: string | null
-}
-
-export function settingsFor(app: App, repo: RepoRow, def: CheckDef) {
-  const group = getGroup(app.db, repo.group_id)
-  return resolveSettings(def, app.config.current, parseSettings(group.settings_json), parseSettings(repo.settings_json))
 }
 
 function checkOf(app: App, kind: string): CheckDef {
@@ -93,10 +88,10 @@ function isInfra(err: unknown): err is InferenceError | SandboxError {
 
 function infraAlert(app: App, err: unknown) {
   if (err instanceof InferenceError && (err.kind === 'auth' || err.kind === 'missing')) {
-    alert(app, `inference.${err.kind}`, `Inference backend ${err.kind === 'auth' ? 'refused credentials' : 'unreachable'}`, err.message)
+    openAlert(app.db, `inference.${err.kind}`, `Inference backend ${err.kind === 'auth' ? 'refused credentials' : 'unreachable'}`, err.message)
   }
   if (err instanceof SandboxError) {
-    alert(app, `sandbox.${err.kind}`, err.kind === 'image' ? 'Sandbox image unavailable' : 'Sandbox unavailable', err.message)
+    openAlert(app.db, `sandbox.${err.kind}`, err.kind === 'image' ? 'Sandbox image unavailable' : 'Sandbox unavailable', err.message)
   }
 }
 
@@ -110,10 +105,37 @@ function sandboxInfo(ws: SessionWorkspace) {
   return isSandbox(ws) ? { install: ws.env.install, test: ws.env.test } : undefined
 }
 
-/** One open alert per code, so an outage is one item rather than one per round. */
-export function alert(app: App, code: string, title: string, body: string) {
-  const open = app.db.prepare("SELECT id FROM activity WHERE kind = 'alert' AND ref_id = ? AND state = 'open'").get(code)
-  if (!open) addItem(app.db, { kind: 'alert', ref: code, title, body })
+/** What a round holds while it runs; the body sets each as it opens it. */
+interface RoundResources {
+  worktree?: string
+  ws?: SessionWorkspace
+  session?: Session
+}
+
+/**
+ * The lifecycle every round shares: on a throw the round ends blocked (infra) or failed, then the
+ * caller's `onError` runs and the error is rethrown; whatever the body opened is closed after.
+ */
+async function inRound<T>(
+  app: App,
+  repo: RepoRow,
+  roundId: string,
+  onError: (err: unknown, infra: boolean) => void,
+  body: (r: RoundResources) => Promise<T>,
+): Promise<T> {
+  const r: RoundResources = {}
+  try {
+    return await body(r)
+  } catch (err) {
+    const infra = isInfra(err)
+    endRound(app, roundId, { status: infra ? 'blocked' : 'failed', error: (err as Error).message })
+    onError(err, infra)
+    throw err
+  } finally {
+    if (r.session) app.sessions.close(r.session)
+    await r.ws?.dispose?.()
+    if (r.worktree) await app.mirrors.removeWorktree(repo, r.worktree)
+  }
 }
 
 function existingFindings(app: App, repo: string, check: string) {
@@ -135,15 +157,17 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
   const scope: 'diff' | 'full' = job.scope === 'diff' && job.base_sha && def.scopes.includes('diff') ? 'diff' : 'full'
   const id = newId('r')
   insertRound(app, { id, repo: repo.key, def, kind: 'round', scope, base: scope === 'diff' ? job.base_sha : null, head, trigger: job.trigger })
-  let worktree: string | undefined
-  let ws: SessionWorkspace | undefined
-  let session: Session | undefined
-  try {
-    worktree = await app.mirrors.addWorktree(repo, id, head)
+  const onError = (err: unknown, infra: boolean) => {
+    logEvent(app.db, { level: infra ? 'warn' : 'error', code: infra ? 'ROUND_BLOCKED' : 'ROUND_FAILED', repo: repo.key, message: `${def.kind} round: ${(err as Error).message}`, detail: { round: id } })
+    infraAlert(app, err)
+  }
+  return inRound(app, repo, id, onError, async (r) => {
+    const worktree = (r.worktree = await app.mirrors.addWorktree(repo, id, head))
+    let ws: SessionWorkspace | undefined
     let recorded
     let narrative: string
     let usage
-    if (def.agent !== 'none' || hasImageDetectors(def)) ws = await openWorkspace(app, { sessionId: id, worktree, head })
+    if (def.agent !== 'none' || hasImageDetectors(def)) ws = r.ws = await openWorkspace(app, { sessionId: id, worktree, head })
     // Before the model or anything else touches the clone (§10.1: nothing installed yet).
     const det = def.detectors.length ? await detect(def, worktree, ws, sandboxOf(app)) : undefined
     if (def.agent === 'none') {
@@ -151,11 +175,11 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
       narrative = det!.notes.map((n) => `- ${n}`).join('\n')
     } else {
       const group = getGroup(app.db, repo.group_id)
-      ws ??= await openWorkspace(app, { sessionId: id, worktree, head })
-      session = app.sessions.open({
+      ws ??= r.ws = await openWorkspace(app, { sessionId: id, worktree, head })
+      const session = (r.session = app.sessions.open({
         id, kind: 'round', repo, check: def, worktree, ws, head, base: scope === 'diff' ? job.base_sha! : undefined, allowWrite: false,
         timeoutS: app.config.current.inference.timeout_s, runTimeoutS: app.config.current.sandbox.run_timeout_s,
-      })
+      }))
       const prompt = roundPrompt({ repo, check: def, worktree, sandbox: sandboxInfo(ws), hints: det, scope, base: session.base, head, groupPolicy: group.policy, existing: existingFindings(app, repo.key, def.kind) })
       const result = await drive(app, session, prompt, id)
       usage = result.usage
@@ -176,17 +200,7 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
     maybeReport(app, repo, def, { id, scope, summary, fresh: rec.created + rec.reopened })
     maybePropose(app, repo, def)
     return id
-  } catch (err) {
-    const infra = isInfra(err)
-    endRound(app, id, { status: infra ? 'blocked' : 'failed', error: (err as Error).message })
-    logEvent(app.db, { level: infra ? 'warn' : 'error', code: infra ? 'ROUND_BLOCKED' : 'ROUND_FAILED', repo: repo.key, message: `${def.kind} round: ${(err as Error).message}`, detail: { round: id } })
-    infraAlert(app, err)
-    throw err
-  } finally {
-    if (session) app.sessions.close(session)
-    await ws?.dispose?.()
-    if (worktree) await app.mirrors.removeWorktree(repo, worktree)
-  }
+  })
 }
 
 /**
@@ -278,20 +292,21 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
   logEvent(app.db, { code: 'PROPOSAL_STARTED', repo: repo.key, message: `${def.kind}: fixing ${findings.length} finding(s)`, detail: { proposal: pid } })
 
   const roundId = newId('r')
-  let worktree: string | undefined
-  let ws: SessionWorkspace | undefined
-  let session: Session | undefined
-  let head: string
-  try {
+  // An infra failure says nothing about the findings: release them without blocking a retry.
+  const onError = (err: unknown, infra: boolean) => {
+    infraAlert(app, err)
+    failProposal(app, pid, (err as Error).message, { block: !infra })
+  }
+  const noChange = await inRound(app, repo, roundId, onError, async (r) => {
     insertRound(app, { id: roundId, repo: repo.key, def, kind: 'author', scope: 'full', head: base, proposal: pid, trigger: job.trigger })
-    worktree = await app.mirrors.addWorktree(repo, roundId, base)
-    ws = await openWorkspace(app, { sessionId: roundId, worktree, head: base })
+    const worktree = (r.worktree = await app.mirrors.addWorktree(repo, roundId, base))
+    const ws = (r.ws = await openWorkspace(app, { sessionId: roundId, worktree, head: base }))
     const sb = sandboxOf(app)
     if (sb && isSandbox(ws) && def.fix_tools.length) await installFixTools(sb.rt, sb.cfg, ws, def.fix_tools)
-    session = app.sessions.open({
+    const session = (r.session = app.sessions.open({
       id: roundId, kind: 'author', repo, check: def, worktree, ws, head: base, allowWrite: true,
       timeoutS: app.config.current.inference.timeout_s, runTimeoutS: app.config.current.sandbox.run_timeout_s,
-    })
+    }))
     const group = getGroup(app.db, repo.group_id)
     const result = await drive(app, session, authorPrompt({ repo, check: def, worktree, sandbox: sandboxInfo(ws), groupPolicy: group.policy, findings }), roundId)
     // A sandbox's change comes back as a patch and is committed here, by the backend (invariant 1).
@@ -304,7 +319,7 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
       const why = session.done?.status === 'cannot' ? session.done.text : 'the session made no change'
       endRound(app, roundId, { status: 'done', summary: `no change: ${why}`, report: why, usage: result.usage })
       failProposal(app, pid, why)
-      return pid
+      return true
     }
     const summary = session.done?.text ?? result.text
     const id = commitIdentity(app, repo)
@@ -314,25 +329,16 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
       config: { 'user.name': id.name, 'user.email': id.email, 'commit.gpgsign': 'false' },
       input: commitMessage(def, summary, sensitive, roundId, findings),
     })
-    head = (await git(['rev-parse', 'HEAD'], { cwd: worktree })).trim()
+    const head = (await git(['rev-parse', 'HEAD'], { cwd: worktree })).trim()
     await git(['update-ref', `refs/heads/${branch}`, head], { gitDir: app.mirrors.gitDir(repo) })
     const patch = await git(['diff', base, head], { cwd: worktree })
     app.db
       .prepare("UPDATE proposals SET state = 'validating', head_sha = ?, summary = ?, patch = ?, updated_at = ? WHERE id = ?")
       .run(head, summary, patch.slice(0, 400_000), now(), pid)
     endRound(app, roundId, { status: 'done', summary: `changed ${status.split('\n').length} file(s)`, report: summary, usage: result.usage })
-  } catch (err) {
-    const infra = isInfra(err)
-    endRound(app, roundId, { status: infra ? 'blocked' : 'failed', error: (err as Error).message })
-    infraAlert(app, err)
-    // An infra failure says nothing about the findings: release them without blocking a retry.
-    failProposal(app, pid, (err as Error).message, { block: !infra })
-    throw err
-  } finally {
-    if (session) app.sessions.close(session)
-    await ws?.dispose?.()
-    if (worktree) await app.mirrors.removeWorktree(repo, worktree)
-  }
+    return false
+  })
+  if (noChange) return pid
   await validate(app, getProposal(app.db, pid)!, job.trigger)
   return pid
 }
@@ -351,10 +357,11 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
     .map((id) => app.db.prepare('SELECT * FROM findings WHERE id = ?').get(id) as FindingRow | undefined)
     .filter((f): f is FindingRow => !!f)
   const roundId = newId('r')
-  let worktree: string | undefined
-  let ws: SessionWorkspace | undefined
-  let session: Session | undefined
-  try {
+  const onError = (err: unknown, infra: boolean) => {
+    infraAlert(app, err)
+    failProposal(app, p.id, `validation could not run: ${(err as Error).message}`, { block: !infra })
+  }
+  await inRound(app, repo, roundId, onError, async (r) => {
     insertRound(app, { id: roundId, repo: repo.key, def, kind: 'confirm', scope: 'diff', base: p.base_sha, head: p.head_sha!, proposal: p.id, trigger })
     const tests = await mechanical(app, repo, p.base_sha, p.head_sha!)
     const testsReport = `## Tests\n\n${renderMechanical(tests)}`
@@ -378,12 +385,12 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
       failProposal(app, p.id, `validation: ${verdict}`)
       return
     }
-    worktree = await app.mirrors.addWorktree(repo, roundId, p.head_sha!)
-    ws = await openWorkspace(app, { sessionId: roundId, worktree, head: p.head_sha! })
-    session = app.sessions.open({
+    const worktree = (r.worktree = await app.mirrors.addWorktree(repo, roundId, p.head_sha!))
+    const ws = (r.ws = await openWorkspace(app, { sessionId: roundId, worktree, head: p.head_sha! }))
+    const session = (r.session = app.sessions.open({
       id: roundId, kind: 'confirm', repo, check: def, worktree, ws, base: p.base_sha, head: p.head_sha!, allowWrite: false,
       timeoutS: app.config.current.inference.timeout_s, runTimeoutS: app.config.current.sandbox.run_timeout_s,
-    })
+    }))
     const result = await drive(app, session, confirmPrompt({ repo, check: def, sandbox: sandboxInfo(ws), base: p.base_sha, head: p.head_sha!, addressed }), roundId)
     const remaining = session.findings
     const ok = remaining.length === 0 && session.done?.status !== 'cannot'
@@ -403,15 +410,5 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
     app.db.prepare("UPDATE proposals SET state = 'ready', updated_at = ? WHERE id = ?").run(now(), p.id)
     logEvent(app.db, { code: 'PROPOSAL_READY', repo: repo.key, message: `${def.kind} proposal validated`, detail: { proposal: p.id } })
     await afterReady(app, p.id)
-  } catch (err) {
-    const infra = isInfra(err)
-    endRound(app, roundId, { status: infra ? 'blocked' : 'failed', error: (err as Error).message })
-    infraAlert(app, err)
-    failProposal(app, p.id, `validation could not run: ${(err as Error).message}`, { block: !infra })
-    throw err
-  } finally {
-    if (session) app.sessions.close(session)
-    await ws?.dispose?.()
-    if (worktree) await app.mirrors.removeWorktree(repo, worktree)
-  }
+  })
 }

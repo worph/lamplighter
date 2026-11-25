@@ -6,7 +6,7 @@ import { apiFor, assertCanDeliver, commitIdentity, deliveryBlocker } from '../fo
 import { git } from '../forges/gitcli.js'
 import { asOwnBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
 import { addItem, openItemFor, recordOverride, resolveFor } from '../activity/index.js'
-import { getRepo, type RepoRow } from '../repos/registry.js'
+import { getRepo, settingsFor, type RepoRow } from '../repos/registry.js'
 import { deleteOwnBranch, fastForwardLine, LineMovedError, pushOwnBranch } from '../repos/push.js'
 import { renderMechanical, type Mechanical } from '../sandbox/validate.js'
 
@@ -49,6 +49,20 @@ function setState(app: App, id: string, state: ProposalState, extra: { error?: s
   app.db
     .prepare('UPDATE proposals SET state = ?, error = COALESCE(?, error), submitted_ref = COALESCE(?, submitted_ref), updated_at = ? WHERE id = ?')
     .run(state, extra.error ?? null, extra.submitted_ref ?? null, now(), id)
+}
+
+/** The proposal's change is on the line: its findings are fixed and its item is done. */
+function markLanded(app: App, p: ProposalRow, resolution: string) {
+  setState(app, p.id, 'landed')
+  releaseFindings(app, p, 'fixed', false)
+  resolveFor(app.db, p.id, resolution)
+}
+
+/** The line moved under the proposal: its findings go back to open, without blocking a retry. */
+function markStale(app: App, p: ProposalRow, message: string) {
+  setState(app, p.id, 'stale', { error: message })
+  releaseFindings(app, p, 'open', false)
+  resolveFor(app.db, p.id, 'stale', message)
 }
 
 /**
@@ -110,9 +124,7 @@ export async function afterReady(app: App, id: string): Promise<void> {
     })
     return
   }
-  const { resolveSettings } = await import('../checks/index.js')
-  const { getGroup, parseSettings } = await import('../repos/registry.js')
-  const s = def ? resolveSettings(def, app.config.current, parseSettings(getGroup(app.db, repo.group_id).settings_json), parseSettings(repo.settings_json)) : undefined
+  const s = def ? settingsFor(app, repo, def) : undefined
   let waiting = ''
   // Passing validation is the approval only when it included the repository's own tests (§7.3).
   if (s?.auto_submit && !testsOf(p)?.ran) waiting = ' (not auto-submitted: no tests ran on it)'
@@ -177,9 +189,7 @@ export async function deliver(app: App, id: string, by: string): Promise<Proposa
   try {
     if (p.delivery === 'push') {
       await fastForwardLine(app.mirrors, repo, p.head_sha)
-      setState(app, id, 'landed')
-      releaseFindings(app, p, 'fixed', false)
-      resolveFor(app.db, id, 'delivered')
+      markLanded(app, p, 'delivered')
       addItem(app.db, { kind: 'pushed', repo: repo.key, ref: id, sensitive: !!p.sensitive, title: `Pushed to ${repo.line}: ${title(p)}`, body: `${p.head_sha.slice(0, 10)} fast-forwarded ${repo.line}. Revert is one click.` })
     } else if (p.delivery === 'pr' && forge.kind !== 'git') {
       await pushOwnBranch(app.mirrors, repo, branch, p.head_sha)
@@ -202,9 +212,7 @@ export async function deliver(app: App, id: string, by: string): Promise<Proposa
     }
   } catch (err) {
     if (err instanceof LineMovedError) {
-      setState(app, id, 'stale', { error: err.message })
-      releaseFindings(app, p, 'open', false)
-      resolveFor(app.db, id, 'stale', err.message)
+      markStale(app, p, err.message)
       logEvent(app.db, { level: 'warn', code: 'PROPOSAL_STALE', repo: repo.key, message: err.message, detail: { proposal: id } })
     }
     throw err
@@ -240,16 +248,12 @@ export async function mergeBranch(app: App, id: string, by: string): Promise<Pro
     await fastForwardLine(app.mirrors, repo, p.head_sha)
   } catch (err) {
     if (err instanceof LineMovedError) {
-      setState(app, id, 'stale', { error: err.message })
-      releaseFindings(app, p, 'open', false)
-      resolveFor(app.db, id, 'stale', err.message)
+      markStale(app, p, err.message)
     }
     throw err
   }
   await deleteOwnBranch(app.mirrors, repo, asOwnBranch(p.branch)).catch(() => undefined)
-  setState(app, id, 'landed')
-  releaseFindings(app, p, 'fixed', false)
-  resolveFor(app.db, id, 'merged')
+  markLanded(app, p, 'merged')
   recordOverride(app.db, { activity: openItemFor(app.db, id)?.id, proposed: { proposal: id }, decided: 'merged' })
   logEvent(app.db, { code: 'MERGED', repo: repo.key, message: `${p.check_kind} branch merged into ${repo.line} by ${by}`, detail: { proposal: id } })
   return mustGet(app, id)
@@ -316,9 +320,7 @@ export async function pollPullRequests(app: App): Promise<void> {
       if (state === 'open') continue
       await deleteOwnBranch(app.mirrors, repo, asOwnBranch(p.branch)).catch(() => undefined)
       if (state === 'merged') {
-        setState(app, p.id, 'landed')
-        releaseFindings(app, p, 'fixed', false)
-        resolveFor(app.db, p.id, 'merged')
+        markLanded(app, p, 'merged')
       } else {
         setState(app, p.id, 'rejected', { error: 'PR closed without merge' })
         releaseFindings(app, p, 'open', true)

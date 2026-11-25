@@ -2,7 +2,7 @@ import type { App } from '../context.js'
 import type { Db } from '../db/index.js'
 import { now } from '../db/index.js'
 import { logEvent } from '../events.js'
-import { addItem, resolveFor } from '../activity/index.js'
+import { openAlert, resolveFor } from '../activity/index.js'
 import { listRepos } from '../repos/registry.js'
 import { credentialRow, forgeApi, forgeRow, listCredentials } from './index.js'
 import type { CredentialAuth, CredentialRow, ForgeApi, ForgeRow } from './types.js'
@@ -271,14 +271,14 @@ export function forgeAlert(app: App, forgeId: string): void {
     const a = access(app, r)
     if (!a.ok && !a.pending && a.why) problems.push(a.why)
   }
-  const open = app.db.prepare("SELECT id FROM activity WHERE kind = 'alert' AND ref_id = ? AND state = 'open'").get(alertCode(forgeId))
-  if (problems.length && !open) {
-    addItem(app.db, {
-      kind: 'alert', ref: alertCode(forgeId),
-      title: `Lamplighter cannot write everywhere on ${forge.name}`,
-      body: `${problems.join(' ')} Nothing can be delivered there until it is fixed in Settings → Forges; rounds still run.`,
-    })
-  } else if (!problems.length) {
+  if (problems.length) {
+    openAlert(
+      app.db,
+      alertCode(forgeId),
+      `Lamplighter cannot write everywhere on ${forge.name}`,
+      `${problems.join(' ')} Nothing can be delivered there until it is fixed in Settings → Forges; rounds still run.`,
+    )
+  } else {
     resolveFor(app.db, alertCode(forgeId), 'resolved', 'every credential works and every repo has one that may push')
   }
 }
