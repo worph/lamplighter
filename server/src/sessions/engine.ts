@@ -15,6 +15,7 @@ import { getGroup, getRepo, parseSettings, type RepoRow } from '../repos/registr
 import { authorPrompt, confirmPrompt, roundPrompt } from './prompt.js'
 import type { Session } from './session.js'
 import { execTool, toolSpecs } from '../tools/workspace.js'
+import { LocalWorkspace } from './workspace.js'
 import { afterReady, failProposal, getProposal, type ProposalRow } from '../delivery/index.js'
 
 export interface QueueRow {
@@ -122,7 +123,7 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
     } else {
       const group = getGroup(app.db, repo.group_id)
       session = app.sessions.open({
-        id, kind: 'round', repo, check: def, worktree, head, base: scope === 'diff' ? job.base_sha! : undefined, allowWrite: false,
+        id, kind: 'round', repo, check: def, worktree, ws: new LocalWorkspace(worktree), head, base: scope === 'diff' ? job.base_sha! : undefined, allowWrite: false,
         timeoutS: app.config.current.inference.timeout_s,
       })
       const prompt = roundPrompt({ repo, check: def, worktree, scope, base: session.base, head, groupPolicy: group.policy, existing: existingFindings(app, repo.key, def.kind) })
@@ -254,7 +255,7 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
   try {
     insertRound(app, { id: roundId, repo: repo.key, def, kind: 'author', scope: 'full', head: base, proposal: pid, trigger: job.trigger })
     worktree = await app.mirrors.addWorktree(repo, roundId, base)
-    session = app.sessions.open({ id: roundId, kind: 'author', repo, check: def, worktree, head: base, allowWrite: true, timeoutS: app.config.current.inference.timeout_s })
+    session = app.sessions.open({ id: roundId, kind: 'author', repo, check: def, worktree, ws: new LocalWorkspace(worktree), head: base, allowWrite: true, timeoutS: app.config.current.inference.timeout_s })
     const group = getGroup(app.db, repo.group_id)
     const result = await drive(app, session, authorPrompt({ repo, check: def, worktree, groupPolicy: group.policy, findings }), roundId)
     const status = (await git(['status', '--porcelain'], { cwd: worktree })).trim()
@@ -310,7 +311,7 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
   try {
     insertRound(app, { id: roundId, repo: repo.key, def, kind: 'confirm', scope: 'diff', base: p.base_sha, head: p.head_sha!, proposal: p.id, trigger })
     worktree = await app.mirrors.addWorktree(repo, roundId, p.head_sha!)
-    session = app.sessions.open({ id: roundId, kind: 'confirm', repo, check: def, worktree, base: p.base_sha, head: p.head_sha!, allowWrite: false, timeoutS: app.config.current.inference.timeout_s })
+    session = app.sessions.open({ id: roundId, kind: 'confirm', repo, check: def, worktree, ws: new LocalWorkspace(worktree), base: p.base_sha, head: p.head_sha!, allowWrite: false, timeoutS: app.config.current.inference.timeout_s })
     const result = await drive(app, session, confirmPrompt({ repo, check: def, base: p.base_sha, head: p.head_sha!, addressed }), roundId)
     const remaining = session.findings
     const ok = remaining.length === 0 && session.done?.status !== 'cannot'

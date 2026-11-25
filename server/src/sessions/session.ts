@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { CheckDef } from '../checks/index.js'
 import type { RepoRow } from '../repos/registry.js'
+import type { Workspace } from './workspace.js'
 
 export type SessionKind = 'round' | 'author' | 'confirm'
 
@@ -25,7 +26,10 @@ export interface Session {
   kind: SessionKind
   repo: RepoRow
   check: CheckDef
+  /** The host worktree: commits, fingerprints and repo context are read from it, never by running its code. */
   worktree: string
+  /** Where the tools act: the worktree itself, or the session's sandbox. */
+  ws: Workspace
   /** Diff scope: the range under review. */
   base?: string
   head: string

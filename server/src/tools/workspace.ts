@@ -1,61 +1,19 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import picomatch from 'picomatch'
 import { z } from 'zod'
 import { zodToJsonSchema } from 'zod-to-json-schema'
-import { git } from '../forges/gitcli.js'
 import type { ToolSpec } from '../inference/types.js'
 import type { Session } from '../sessions/session.js'
+import { ToolInputError } from '../sessions/workspace.js'
 
 /**
  * The session toolset: the only way a model sees or changes a repository. The same functions
  * serve both inference modes — over HTTP for an agentic backend, in-process for a tool-calling one.
+ * They act on the session's Workspace: a local worktree, or the session's sandbox container.
  */
 
 const MAX_READ = 200_000
 const MAX_WRITE = 500_000
 const MAX_LINES = 400
-
-export class ToolInputError extends Error {}
-
-/** Resolve a repo-relative path inside the worktree, refusing escapes (lexical and via symlinks) and the git metadata. */
-export function checkRel(worktree: string, p: unknown): string {
-  if (typeof p !== 'string' || !p.trim()) throw new ToolInputError('path is required')
-  const clean = p.replace(/\\/g, '/').replace(/^\.\//, '')
-  if (isAbsolute(clean)) throw new ToolInputError('path must be relative to the repository root')
-  const abs = resolve(worktree, clean)
-  const rel = relative(worktree, abs)
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new ToolInputError(`path escapes the repository: ${p}`)
-  if (rel.split(sep)[0] === '.git') throw new ToolInputError('the .git directory is not part of the workspace')
-
-  // Symlinks: resolve the deepest existing component (a dangling symlink counts as existing and
-  // fails to resolve) and require the real location to stay inside the real worktree.
-  let existing = abs
-  for (;;) {
-    try {
-      lstatSync(existing)
-      break
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw new ToolInputError(`cannot access path: ${p}`)
-      const parent = dirname(existing)
-      if (parent === existing) throw new ToolInputError(`path escapes the repository: ${p}`)
-      existing = parent
-    }
-  }
-  let realExisting: string
-  let realRoot: string
-  try {
-    realExisting = realpathSync(existing)
-    realRoot = realpathSync(worktree)
-  } catch {
-    throw new ToolInputError(`path escapes the repository: ${p}`)
-  }
-  const realRel = relative(realRoot, realExisting)
-  if (realRel.startsWith('..') || isAbsolute(realRel)) throw new ToolInputError(`path escapes the repository: ${p}`)
-  if (realRel.split(sep)[0] === '.git') throw new ToolInputError('the .git directory is not part of the workspace')
-  return abs
-}
 
 const severity = z.enum(['critical', 'major', 'minor'])
 
@@ -77,8 +35,8 @@ export const WORKSPACE_TOOLS = [
     description: 'List files in the repository (tracked and new), optionally filtered by a glob such as "src/**/*.ts".',
     schema: z.object({ glob: z.string().optional() }),
     async run(s, { glob }) {
-      const tracked = await git(['ls-files', '-z'], { cwd: s.worktree })
-      const others = await git(['ls-files', '-z', '--others', '--exclude-standard'], { cwd: s.worktree })
+      const tracked = await s.ws.git(['ls-files', '-z'])
+      const others = await s.ws.git(['ls-files', '-z', '--others', '--exclude-standard'])
       let files = [...tracked.split('\0'), ...others.split('\0')].filter(Boolean)
       if (glob) {
         const m = picomatch(glob, { dot: true })
@@ -94,9 +52,8 @@ export const WORKSPACE_TOOLS = [
     description: 'Read a text file. Lines are numbered. Use start_line/end_line for large files.',
     schema: z.object({ path: z.string(), start_line: z.number().int().min(1).optional(), end_line: z.number().int().min(1).optional() }),
     async run(s, { path, start_line, end_line }) {
-      const abs = checkRel(s.worktree, path)
-      if (!existsSync(abs) || !statSync(abs).isFile()) throw new ToolInputError(`no such file: ${path}`)
-      const buf = readFileSync(abs)
+      const buf = await s.ws.readFile(await s.ws.resolve(path))
+      if (!buf) throw new ToolInputError(`no such file: ${path}`)
       if (buf.subarray(0, 8000).includes(0)) return `(binary file, ${buf.length} bytes)`
       const lines = buf.toString('utf8').split('\n')
       const from = (start_line ?? 1) - 1
@@ -121,7 +78,7 @@ export const WORKSPACE_TOOLS = [
       const args = ['grep', '-n', '-I', '-E', '--untracked', ...(ignore_case ? ['-i'] : []), '-e', pattern]
       if (glob) args.push('--', glob)
       try {
-        const out = await git(args, { cwd: s.worktree })
+        const out = await s.ws.git(args)
         const lines = out.split('\n').filter(Boolean)
         return lines.slice(0, MAX_LINES).map((l) => (l.length > 400 ? `${l.slice(0, 400)}…` : l)).join('\n') + (lines.length > MAX_LINES ? `\n… ${lines.length - MAX_LINES} more matches` : '')
       } catch (err) {
@@ -136,8 +93,8 @@ export const WORKSPACE_TOOLS = [
     schema: z.object({ limit: z.number().int().min(1).max(200).optional(), path: z.string().optional() }),
     async run(s, { limit, path }) {
       const args = ['log', '--format=%h %ad %an: %s', '--date=short', '-n', String(limit ?? 30), s.head]
-      if (path) args.push('--', relative(s.worktree, checkRel(s.worktree, path)))
-      return (await git(args, { cwd: s.worktree })) || '(no commits)'
+      if (path) args.push('--', await s.ws.resolve(path))
+      return (await s.ws.git(args)) || '(no commits)'
     },
   }),
   def({
@@ -150,8 +107,8 @@ export const WORKSPACE_TOOLS = [
       if (s.kind === 'author') args.push('HEAD')
       else if (s.base) args.push(`${s.base}..${s.head}`)
       else return '(this session reviews the whole repository at one commit — there is no diff)'
-      if (path) args.push('--', relative(s.worktree, checkRel(s.worktree, path)))
-      const out = await git(args, { cwd: s.worktree })
+      if (path) args.push('--', await s.ws.resolve(path))
+      const out = await s.ws.git(args)
       return out.length > MAX_READ ? `${out.slice(0, MAX_READ)}\n… diff truncated; narrow it with path` : out || '(no changes)'
     },
   }),
@@ -183,10 +140,9 @@ export const WORKSPACE_TOOLS = [
     schema: z.object({ path: z.string(), content: z.string() }),
     write: true,
     async run(s, { path, content }) {
-      const abs = checkRel(s.worktree, path)
+      const rel = await s.ws.resolve(path)
       if (content.length > MAX_WRITE) throw new ToolInputError('file too large')
-      mkdirSync(dirname(abs), { recursive: true })
-      writeFileSync(abs, content)
+      await s.ws.writeFile(rel, content)
       s.written.add(path)
       return `wrote ${path} (${content.length} chars)`
     },
@@ -197,9 +153,7 @@ export const WORKSPACE_TOOLS = [
     schema: z.object({ path: z.string() }),
     write: true,
     async run(s, { path }) {
-      const abs = checkRel(s.worktree, path)
-      if (!existsSync(abs)) throw new ToolInputError(`no such file: ${path}`)
-      rmSync(abs)
+      if (!(await s.ws.deleteFile(await s.ws.resolve(path)))) throw new ToolInputError(`no such file: ${path}`)
       s.written.add(path)
       return `deleted ${path}`
     },
