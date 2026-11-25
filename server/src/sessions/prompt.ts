@@ -24,6 +24,28 @@ function repoContext(worktree: string): string {
   return parts.join('\n\n')
 }
 
+/** The session's sandbox, as the prompt describes it. Absent: the model has file tools only (v1). */
+export interface SandboxInfo {
+  install: string[]
+  test: string[]
+}
+
+function sandboxBlock(sb: SandboxInfo | undefined, writes: boolean): string {
+  if (!sb) return ''
+  const list = (cmds: string[], none: string) => (cmds.length ? cmds.map((c) => `\`${c}\``).join(', then ') : none)
+  return [
+    '## The sandbox',
+    '',
+    'This session runs in a sandbox: a container with a clone of the repository (with its history, without a remote) and the `run` tool, which runs a shell command at the repository root.',
+    '- Toolchains come from mise, at the versions the repository names (.nvmrc, package.json engines, .python-version, go.mod…): `mise install` before the first build or test.',
+    `- Dependencies are not installed yet. Install: ${list(sb.install, 'nothing detected — read the repository to find out')}.`,
+    `- Tests: ${list(sb.test, 'none detected')}.`,
+    writes
+      ? '- Only changes inside the repository are kept, and dependency folders (node_modules, .venv) never are. A change that needs a package manager (a lockfile refresh, a version bump) can be made here: run it.'
+      : '- Nothing you change here is kept: this session only reads and reports. Run what helps you judge (tests, `--help`, a build).',
+  ].join('\n')
+}
+
 function policyBlock(groupPolicy: string, repoPolicy: string): string {
   const p = [groupPolicy.trim() && `Group policy:\n${groupPolicy.trim()}`, repoPolicy.trim() && `Repository policy:\n${repoPolicy.trim()}`].filter(Boolean)
   return p.length ? `## Policy (the operator's rules — they win over general best practice)\n\n${p.join('\n\n')}` : ''
@@ -38,6 +60,7 @@ export interface RoundPromptArgs {
   repo: RepoRow
   check: CheckDef
   worktree: string
+  sandbox?: SandboxInfo
   scope: 'diff' | 'full'
   base?: string
   head: string
@@ -70,11 +93,12 @@ export function roundPrompt(a: RoundPromptArgs): string {
     '',
     policyBlock(a.groupPolicy, a.repo.policy),
     repoContext(a.worktree),
+    sandboxBlock(a.sandbox, false),
     existing,
     '',
     '## How to work',
     '',
-    '1. Explore with list_files, read_file, grep, git_log (and git_diff for a diff review).',
+    `1. Explore with list_files, read_file, grep, git_log (and git_diff for a diff review)${a.sandbox ? '; use run to check what reading cannot settle' : ''}.`,
     `2. Record each real problem with record_finding. category must be one of: ${a.check.categories.join(', ')}.`,
     '   severity: critical | major | minor. anchor: the repository-relative file path (optionally path#symbol).',
     '   The body says what is wrong, where (quote it), and what the fix would be. No speculation: if you cannot point at it, do not record it.',
@@ -89,6 +113,7 @@ export interface AuthorPromptArgs {
   repo: RepoRow
   check: CheckDef
   worktree: string
+  sandbox?: SandboxInfo
   groupPolicy: string
   findings: FindingRow[]
 }
@@ -102,6 +127,7 @@ export function authorPrompt(a: AuthorPromptArgs): string {
     '',
     policyBlock(a.groupPolicy, a.repo.policy),
     repoContext(a.worktree),
+    sandboxBlock(a.sandbox, true),
     '',
     '## Findings to fix',
     '',
@@ -111,8 +137,12 @@ export function authorPrompt(a: AuthorPromptArgs): string {
     '',
     '1. Read the code around each finding before changing it.',
     '2. Change files with write_file (full new content) and delete_file. Change only what the findings require.',
-    '3. Check your edits with git_diff.',
-    '4. If a finding cannot be fixed with file edits alone (it needs a package manager, a migration, a decision), leave it and say so in the summary.',
+    a.sandbox
+      ? '3. Check your edits with git_diff, and run the tests: a change that breaks a test passing before it will be rejected.'
+      : '3. Check your edits with git_diff.',
+    a.sandbox
+      ? '4. If a finding cannot be fixed here (it needs a migration, a decision, a credential), leave it and say so in the summary.'
+      : '4. If a finding cannot be fixed with file edits alone (it needs a package manager, a migration, a decision), leave it and say so in the summary.',
     '5. Call finish with the change description: the first line is a short title (imperative, under 70 characters), then a blank line, then what changed and why, per finding id.',
     '   If you changed nothing at all, call cannot with the reason instead.',
   ]
@@ -123,6 +153,7 @@ export function authorPrompt(a: AuthorPromptArgs): string {
 export interface ConfirmPromptArgs {
   repo: RepoRow
   check: CheckDef
+  sandbox?: SandboxInfo
   base: string
   head: string
   addressed: FindingRow[]
@@ -138,6 +169,8 @@ export function confirmPrompt(a: ConfirmPromptArgs): string {
     '## Findings the change claims to fix',
     '',
     ...a.addressed.map((f) => `- [${f.id}] ${f.category} @ ${f.anchor}: ${f.title}`),
+    '',
+    sandboxBlock(a.sandbox, false),
     '',
     '## How to work',
     '',

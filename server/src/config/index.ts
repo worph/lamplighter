@@ -49,11 +49,34 @@ export const scheduleSchema = z.object({
       open_items_per_repo: z.number().int().min(1).max(100).default(5),
 })
 
+/** Images are pinned by digest: "present" is then exact, and an upgrade is a config change someone made. */
+export const SANDBOX_IMAGES = {
+  base: 'docker.io/library/buildpack-deps:bookworm-scm@sha256:c1074fbc2283024832adb97a9dab3f7717bbbb49e606cd00ccbfcdcb4ca92c8d',
+  mise: 'docker.io/jdxcode/mise:2026.11.3@sha256:60a4852b1632aebb032c94bfbaf8196a1088c091bfd6cfa1ce8f182ab39c7d8e',
+}
+
+export const sandboxSchema = z.object({
+      enabled: z.boolean().default(false),
+      docker_url: z.string().default('tcp://lamplighter-docker:2375'),
+      network: z.string().default('lamplighter-sandbox'),
+      base_image: z.string().default(SANDBOX_IMAGES.base),
+      mise_image: z.string().default(SANDBOX_IMAGES.mise),
+      uid: z.number().int().min(1).max(65535).default(10001),
+      cpus: z.number().min(0.25).max(32).default(2),
+      memory_mb: z.number().int().min(256).max(131072).default(2048),
+      pids: z.number().int().min(64).max(65536).default(512),
+      run_timeout_s: z.number().int().min(10).max(3600).default(600),
+      command_timeout_s: z.number().int().min(30).max(7200).default(1800),
+      cache_max_gb: z.number().min(1).max(1000).default(20),
+})
+export type SandboxConfig = z.infer<typeof sandboxSchema>
+
 export const configSchema = z.object({
   public_url: z.string().default('http://lamplighter-backend:8080'),
   inference: inferenceSchema.default({}),
   identity: identitySchema.default({}),
   schedule: scheduleSchema.default({}),
+  sandbox: sandboxSchema.default({}),
   checks: z.record(z.string(), checkSettingsSchema).default({}),
 })
 export type Config = z.infer<typeof configSchema>
@@ -88,6 +111,18 @@ schedule:
   deliveries_per_hour: 2     # branches / PRs / pushes per rolling hour across the fleet
   open_items_per_repo: 5     # attention cap: no new proposal while a repo has this many open items
 
+sandbox:                     # a credential-free container per session, to run tests, package managers and scanners
+  enabled: __SANDBOX_ENABLED__
+  docker_url: __DOCKER_URL__ # docker-socket-proxy (never the socket itself), or unix:///var/run/docker.sock in development
+  network: lamplighter-sandbox # the sandboxes' own network: not pcs, so they cannot reach Beacon or the admin MCP
+  uid: 10001                 # every sandbox runs as this user, with every capability dropped
+  cpus: 2                    # per sandbox
+  memory_mb: 2048
+  pids: 512
+  run_timeout_s: 600         # one \`run\` call by the model
+  command_timeout_s: 1800    # one validation command (install + tests)
+  cache_max_gb: 20           # toolchain and package caches; past this they are emptied
+
 # Per-check overrides of the defaults in checks/<kind>.md. Group and repo settings override these.
 checks: {}
 `
@@ -106,7 +141,9 @@ export class ConfigStore {
           .replace('__URL__', s.inferenceUrl ?? 'http://beacon-backend:9300/mcp')
           .replace('__TOOL__', s.inferenceTool ?? 'claude-code__query_claude')
           .replace('__VIA__', s.inferenceVia ?? 'beacon')
-          .replace('__MODEL__', s.inferenceModel ?? ''),
+          .replace('__MODEL__', s.inferenceModel ?? '')
+          .replace('__SANDBOX_ENABLED__', s.dockerUrl ? 'true' : 'false')
+          .replace('__DOCKER_URL__', s.dockerUrl ?? 'tcp://lamplighter-docker:2375'),
       )
     }
     this.doc = YAML.parseDocument(readFileSync(file, 'utf8'))

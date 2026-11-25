@@ -13,6 +13,7 @@ import { registerHooks } from './hooks/index.js'
 import { registerMcp, VERSION } from './mcp/index.js'
 import { ensureDefaultGroup, getRepo } from './repos/registry.js'
 import { Mirrors } from './repos/mirror.js'
+import { sandboxHousekeeping } from './sandbox/index.js'
 import { Scheduler } from './scheduler/index.js'
 import { SessionRegistry } from './sessions/session.js'
 import { SETTING, getOrCreateSecret, getSetting, setSetting } from './settings.js'
@@ -64,7 +65,16 @@ async function main() {
   await f.listen({ port: env.port, host: env.host })
   logEvent(db, { code: 'STARTED', message: `Lamplighter ${VERSION} started; inference ${config.current.inference.driver} at ${config.current.inference.url}` })
   scheduler.start()
+
+  const housekeeping = async (what: 'reap' | 'trim') => {
+    const note = await sandboxHousekeeping(app, what)
+    if (note) logEvent(db, { level: note.includes('failed') ? 'warn' : 'info', code: 'SANDBOX', message: note })
+  }
+  void housekeeping('reap')
+  setInterval(() => void housekeeping('trim'), SANDBOX_TRIM_MS).unref()
 }
+
+const SANDBOX_TRIM_MS = 24 * 3600 * 1000
 
 main().catch((err) => {
   console.error(err)

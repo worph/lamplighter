@@ -23,6 +23,8 @@ export interface Env {
     inferenceVia?: string
     inferenceModel?: string
     inferenceBearer?: string
+    /** Seeds `sandbox.docker_url`, and turns the sandbox on, on first boot. */
+    dockerUrl?: string
   }
 }
 
@@ -47,6 +49,7 @@ export function loadEnv(): Env {
       inferenceVia: e.LAMPLIGHTER_INFERENCE_VIA || undefined,
       inferenceModel: e.LAMPLIGHTER_INFERENCE_MODEL || undefined,
       inferenceBearer: e.LAMPLIGHTER_INFERENCE_BEARER || undefined,
+      dockerUrl: e.LAMPLIGHTER_DOCKER_URL || undefined,
     },
   }
 }

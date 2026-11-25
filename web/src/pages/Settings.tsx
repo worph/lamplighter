@@ -13,6 +13,7 @@ export default function Settings() {
     <div className="space-y-4 max-w-5xl">
       <h1 className="text-xl font-semibold">Settings</h1>
       <Inference s={s} />
+      <Sandbox s={s} />
       <General s={s} />
       <Forges s={s} />
       <Checks s={s} />
@@ -93,6 +94,54 @@ function Inference({ s }: { s: SettingsView }) {
       </div>
       {test.data && <p className={`mt-2 text-sm ${test.data.ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-300'}`}>{test.data.detail}</p>}
       <ErrorNote error={save.error || saveBearer.error || test.error} />
+    </Card>
+  )
+}
+
+function Sandbox({ s }: { s: SettingsView }) {
+  const refresh = useRefresh()
+  const [f, setF] = useState(s.config.sandbox)
+  useEffect(() => { setF(s.config.sandbox) }, [s.config.sandbox])
+  const save = useMutation({ mutationFn: () => api.putSandbox(f), onSuccess: refresh })
+  const test = useMutation({ mutationFn: api.testSandbox })
+  const dirty = JSON.stringify(f) !== JSON.stringify(s.config.sandbox)
+  const num = (k: keyof typeof f, label: string, hint?: string) => (
+    <Field label={label} hint={hint}><input type="number" className={inputCls} value={f[k] as number} onChange={(e) => setF({ ...f, [k]: Number(e.target.value) })} /></Field>
+  )
+  return (
+    <Card
+      title="Sandbox"
+      actions={<>
+        {test.data && <Badge tone={test.data.ok ? 'green' : 'red'}>{test.data.ok ? 'ready' : 'failing'}</Badge>}
+        <Button onClick={() => test.mutate()} disabled={test.isPending}>{test.isPending ? 'Testing…' : 'Test'}</Button>
+        <Button variant="primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>Save</Button>
+      </>}
+    >
+      <p className="text-xs text-stone-500 mb-3">
+        A credential-free container per session, so a round can run the repository’s tests, package managers and scanners. Lamplighter reaches Docker through
+        docker-socket-proxy, never the socket itself. Off: nothing of a repository runs, validation is the review session alone, and <code>cve</code>/<code>deps</code>
+        fixes cannot refresh a lockfile. The first Test pulls the base image and mise, which takes a few minutes.
+      </p>
+      <label className="flex items-center gap-2 text-sm mb-3"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Run sessions in sandboxes</label>
+      <div className="grid gap-3 md:grid-cols-3">
+        <Field label="Docker URL" hint="tcp://lamplighter-docker:2375 (the proxy) or unix:///var/run/docker.sock in development">
+          <input className={inputCls} value={f.docker_url} onChange={(e) => setF({ ...f, docker_url: e.target.value })} />
+        </Field>
+        <Field label="Network" hint="the sandboxes’ own network, never pcs"><input className={inputCls} value={f.network} onChange={(e) => setF({ ...f, network: e.target.value })} /></Field>
+        {num('uid', 'Sandbox uid')}
+        {num('cpus', 'CPUs per sandbox')}
+        {num('memory_mb', 'Memory per sandbox (MB)')}
+        {num('pids', 'Processes per sandbox')}
+        {num('run_timeout_s', 'One run call (s)')}
+        {num('command_timeout_s', 'One validation command (s)')}
+        {num('cache_max_gb', 'Cache cap (GB)', 'past it, the package cache is emptied')}
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 mt-3">
+        <Field label="Base image" hint="pinned by digest"><input className={inputCls} value={f.base_image} onChange={(e) => setF({ ...f, base_image: e.target.value })} /></Field>
+        <Field label="mise image" hint="its static binary is copied into the toolchain volume"><input className={inputCls} value={f.mise_image} onChange={(e) => setF({ ...f, mise_image: e.target.value })} /></Field>
+      </div>
+      {test.data && <p className={`mt-2 text-sm ${test.data.ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-300'}`}>{test.data.detail}</p>}
+      <ErrorNote error={save.error || test.error} />
     </Card>
   )
 }

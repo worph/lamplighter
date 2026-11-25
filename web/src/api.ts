@@ -228,12 +228,28 @@ export interface CredentialAuth {
   checked_at?: string
 }
 
+export interface SandboxConfig {
+  enabled: boolean
+  docker_url: string
+  network: string
+  base_image: string
+  mise_image: string
+  uid: number
+  cpus: number
+  memory_mb: number
+  pids: number
+  run_timeout_s: number
+  command_timeout_s: number
+  cache_max_gb: number
+}
+
 export interface SettingsView {
   config: {
     public_url: string
     inference: { driver: 'claude-code' | 'openai' | 'text'; url: string; tool: string; via: 'beacon' | 'direct'; model: string; workdir: string; timeout_s: number; max_tool_rounds: number }
     identity: { name: string; email: string }
     schedule: { enabled: boolean; rotation: boolean; tick_s: number; poll_min: number; debounce_min: number; slots: number; sessions_per_hour: number; deliveries_per_hour: number; open_items_per_repo: number }
+    sandbox: SandboxConfig
     checks: Record<string, Partial<CheckSettings>>
   }
   inference_bearer: string | null
@@ -280,6 +296,8 @@ export const api = {
   putBearer: (value: string | null) => request('/api/v1/settings/inference/bearer', { method: 'PUT', json: { value } }),
   testInference: () => request<{ ok: boolean; detail: string }>('/api/v1/settings/inference/test', { method: 'POST' }),
   putSchedule: (b: Partial<SettingsView['config']['schedule']>) => request('/api/v1/settings/schedule', { method: 'PUT', json: b }),
+  putSandbox: (b: Partial<SandboxConfig>) => request('/api/v1/settings/sandbox', { method: 'PUT', json: b }),
+  testSandbox: () => request<{ ok: boolean; detail: string }>('/api/v1/settings/sandbox/test', { method: 'POST' }),
   putGeneral: (b: { public_url?: string; identity?: Partial<SettingsView['config']['identity']> }) => request('/api/v1/settings/general', { method: 'PUT', json: b }),
   putCheck: (check: string, s: Partial<CheckSettings>) => request(`/api/v1/settings/checks/${check}`, { method: 'PUT', json: s }),
   reloadChecks: () => request<{ checks: string[]; errors: string[] }>('/api/v1/settings/checks/reload', { method: 'POST' }),

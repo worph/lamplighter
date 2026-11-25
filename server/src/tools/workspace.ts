@@ -2,7 +2,7 @@ import picomatch from 'picomatch'
 import { z } from 'zod'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 import type { ToolSpec } from '../inference/types.js'
-import type { Session } from '../sessions/session.js'
+import { SESSION_SLACK_S, type Session } from '../sessions/session.js'
 import { ToolInputError } from '../sessions/workspace.js'
 
 /**
@@ -14,6 +14,10 @@ import { ToolInputError } from '../sessions/workspace.js'
 const MAX_READ = 200_000
 const MAX_WRITE = 500_000
 const MAX_LINES = 400
+/** A `run` result is cut to what every driver passes back whole (openai/text cap results at 20 000 chars). */
+const MAX_RUN_OUTPUT = 18_000
+/** Session time `run` always leaves for the model to write its report. */
+const RUN_RESERVE_S = 120
 
 const severity = z.enum(['critical', 'major', 'minor'])
 
@@ -22,6 +26,8 @@ interface ToolDef<S extends z.ZodTypeAny> {
   description: string
   schema: S
   write?: boolean
+  /** Runs repository code: only in a sandbox session. */
+  exec?: boolean
   run(s: Session, input: z.infer<S>): Promise<string>
 }
 
@@ -159,6 +165,22 @@ export const WORKSPACE_TOOLS = [
     },
   }),
   def({
+    name: 'run',
+    description:
+      'Run a shell command (sh -c) at the repository root inside the sandbox: tests, builds, package managers, `--help`. Toolchains come from mise (`mise install` first if node/python is missing). Returns the exit code and the output, cut in the middle when long.',
+    schema: z.object({ command: z.string().min(1).max(4000), timeout_s: z.number().int().min(1).max(3600).optional() }),
+    exec: true,
+    async run(s, { command, timeout_s }) {
+      if (!s.ws.exec) throw new ToolInputError('run needs the sandbox, and this session has none')
+      const left = Math.floor((s.expiresAt - Date.now()) / 1000) - SESSION_SLACK_S - RUN_RESERVE_S
+      const limit = Math.min(timeout_s ?? s.runTimeoutS, s.runTimeoutS, left)
+      if (limit < 1) throw new ToolInputError('not enough session time left to run a command — finish now')
+      const r = await s.ws.exec(command, { timeoutMs: limit * 1000, maxBytes: MAX_RUN_OUTPUT })
+      const status = r.timedOut ? `timed out after ${limit}s` : `exit ${r.code}`
+      return `${status}\n${r.output || '(no output)'}`
+    },
+  }),
+  def({
     name: 'finish',
     description:
       'End the session. summary: for a review, the report (markdown); for a fix, the change description — first line is the title.',
@@ -181,6 +203,7 @@ export const WORKSPACE_TOOLS = [
 
 export function toolSpecs(s: Session): ToolSpec[] {
   return WORKSPACE_TOOLS.filter((t) => !t.write || s.allowWrite)
+    .filter((t) => !t.exec || !!s.ws.exec)
     .filter((t) => !(t.name === 'record_finding' && s.kind === 'author'))
     .map((t) => {
       const schema = zodToJsonSchema(t.schema, { $refStrategy: 'none' }) as Record<string, unknown>
@@ -193,6 +216,7 @@ export async function execTool(s: Session, name: string, raw: unknown): Promise<
   const tool = WORKSPACE_TOOLS.find((t) => t.name === name)
   if (!tool) throw new ToolInputError(`unknown tool "${name}"`)
   if (tool.write && !s.allowWrite) throw new ToolInputError(`${name} is not available in a review session`)
+  if (tool.exec && !s.ws.exec) throw new ToolInputError(`${name} needs the sandbox, and this session has none`)
   if (s.done && name !== 'finish' && name !== 'cannot') throw new ToolInputError('the session has ended')
   const parsed = tool.schema.safeParse(raw ?? {})
   if (!parsed.success) throw new ToolInputError(`bad arguments: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`)

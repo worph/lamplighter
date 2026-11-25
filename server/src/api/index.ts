@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { checkSettingsSchema, identitySchema, inferenceSchema, scheduleSchema } from '../config/index.js'
+import { checkSettingsSchema, identitySchema, inferenceSchema, sandboxSchema, scheduleSchema } from '../config/index.js'
 import type { App } from '../context.js'
 import { now } from '../db/index.js'
 import { listEvents, logEvent } from '../events.js'
@@ -13,6 +13,7 @@ import {
 import { driverFor } from '../inference/index.js'
 import { getItem, listItems, resolveItem } from '../activity/index.js'
 import { addRepo, getRepo, listGroups, listRepos, parseSettings, getGroup } from '../repos/registry.js'
+import { probeSandbox } from '../sandbox/index.js'
 import { enqueueRound } from '../scheduler/index.js'
 import { maybePropose, settingsFor } from '../sessions/engine.js'
 import { deliver, getProposal, mergeBranch, rejectProposal, revertPush } from '../delivery/index.js'
@@ -256,6 +257,8 @@ export function registerApi(f: FastifyInstance, app: App): void {
   })
   f.post('/api/v1/settings/inference/test', async () => driverFor(app.config.current, app.db).probe())
   f.put('/api/v1/settings/schedule', async (req) => app.config.update(['schedule'], scheduleSchema.partial().parse(req.body)).schedule)
+  f.put('/api/v1/settings/sandbox', async (req) => app.config.update(['sandbox'], sandboxSchema.partial().parse(req.body)).sandbox)
+  f.post('/api/v1/settings/sandbox/test', async () => probeSandbox(app))
   f.put('/api/v1/settings/general', async (req) => {
     const body = z.object({ public_url: z.string().url().optional(), identity: identitySchema.partial().optional() }).parse(req.body)
     if (body.identity) app.config.update(['identity'], body.identity)

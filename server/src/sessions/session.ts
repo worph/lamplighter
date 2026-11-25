@@ -5,6 +5,9 @@ import type { Workspace } from './workspace.js'
 
 export type SessionKind = 'round' | 'author' | 'confirm'
 
+/** A token outlives its session's clock by this much, so a late `finish` still lands. */
+export const SESSION_SLACK_S = 600
+
 export interface RecordedFinding {
   category: string
   anchor: string
@@ -34,6 +37,8 @@ export interface Session {
   base?: string
   head: string
   allowWrite: boolean
+  /** Cap on one `run` call (sandbox sessions). */
+  runTimeoutS: number
   expiresAt: number
   findings: RecordedFinding[]
   written: Set<string>
@@ -50,7 +55,7 @@ export class SessionRegistry {
       ...rest,
       token: randomBytes(24).toString('base64url'),
       agentSessionId: randomUUID(),
-      expiresAt: Date.now() + (timeoutS + 600) * 1000,
+      expiresAt: Date.now() + (timeoutS + SESSION_SLACK_S) * 1000,
       findings: [],
       written: new Set(),
       calls: 0,

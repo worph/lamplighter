@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, posix, relative, resolve, sep } from 'node:path'
 import { git } from '../forges/gitcli.js'
 
 /**
@@ -23,15 +23,20 @@ export interface Workspace {
 
 export class ToolInputError extends Error {}
 
-/** Resolve a repo-relative path inside the worktree, refusing escapes (lexical and via symlinks) and the git metadata. */
-export function checkRel(worktree: string, p: unknown): string {
+/** The lexical half of the check, shared by every workspace: repo-relative, no `..` out, not under .git. */
+export function lexicalRel(p: unknown): string {
   if (typeof p !== 'string' || !p.trim()) throw new ToolInputError('path is required')
   const clean = p.replace(/\\/g, '/').replace(/^\.\//, '')
-  if (isAbsolute(clean)) throw new ToolInputError('path must be relative to the repository root')
-  const abs = resolve(worktree, clean)
-  const rel = relative(worktree, abs)
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new ToolInputError(`path escapes the repository: ${p}`)
-  if (rel.split(sep)[0] === '.git') throw new ToolInputError('the .git directory is not part of the workspace')
+  if (posix.isAbsolute(clean)) throw new ToolInputError('path must be relative to the repository root')
+  const rel = posix.normalize(clean).replace(/\/+$/, '')
+  if (!rel || rel === '.' || rel === '..' || rel.startsWith('../')) throw new ToolInputError(`path escapes the repository: ${p}`)
+  if (rel.split('/')[0] === '.git') throw new ToolInputError('the .git directory is not part of the workspace')
+  return rel
+}
+
+/** Resolve a repo-relative path inside the worktree, refusing escapes (lexical and via symlinks) and the git metadata. */
+export function checkRel(worktree: string, p: unknown): string {
+  const abs = resolve(worktree, lexicalRel(p))
 
   // Symlinks: resolve the deepest existing component (a dangling symlink counts as existing and
   // fails to resolve) and require the real location to stay inside the real worktree.
