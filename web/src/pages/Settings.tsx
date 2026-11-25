@@ -275,7 +275,7 @@ function TokenGuide({ forge: x, owners }: { forge: Forge; owners: string[] }) {
         Each credential is an account Lamplighter pushes branches, pushes and pull requests as. Everything it delivers
         carries that account’s name, so use one that may speak for those repositories: a bot account,
         or an organisation-owned token — not your personal one unless you want the changes to be yours.
-        {x.kind === 'github' && <> Make a <strong>fine-grained</strong> personal access token, <strong>not a classic one</strong>: a classic token reaches every repository the account can, a fine-grained one only the repositories you pick.</>}
+        {x.kind === 'github' && <> Prefer a <strong>fine-grained</strong> personal access token: it reaches only the repositories you pick, a classic one every repository the account can. One exception: a fine-grained token cannot reach a repository <strong>owned by another personal account</strong>, even one where this account is a collaborator. For those, make a <strong>classic</strong> token with only <code>public_repo</code> (public repositories) or <code>repo</code> (private ones). Leave <code>workflow</code> off, so no push can change <code>.github/workflows/</code>.</>}
       </p>
       {x.kind === 'github' ? (
         <ol className="mt-2 list-decimal pl-5 space-y-0.5">

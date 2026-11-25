@@ -116,7 +116,9 @@ there — you, an organisation's token, a bot. A fine-grained GitHub token reach
 owner, so personal and organisation repos on github.com are two credentials on one forge. Tokens
 are set the way Touchstone sets its GitHub token: in Settings → Forges & credentials, with a guide
 to what kind of token to make and how to scope it (fine-grained; Contents and Pull requests
-read/write; only the monitored repositories). They are stored in the database and **write-only**:
+read/write; only the monitored repositories). The exception is a repo owned by another personal
+account where the token's account is only a collaborator: fine-grained tokens cannot reach it, so
+that credential is a classic token with `public_repo` (or `repo` for private ones) and no `workflow`. They are stored in the database and **write-only**:
 no route returns them (`PUT|DELETE /api/v1/credentials/:id/token`), and no chat or admin-MCP tool
 can set one. Each save is checked in the same response (`forges/auth.ts`): whose token it is, and
 whether it may push to each monitored repo on its forge (account role, then the token's own

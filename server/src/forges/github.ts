@@ -67,7 +67,9 @@ export class GitHubForge implements ForgeApi {
     } catch (err) {
       const status = (err as { status?: number }).status
       if (status === 422) return { push: true }
-      if (status === 403 || status === 404) return { push: false, detail: 'the token was not given Contents: Read and write for this repository' }
+      // The account may push (checked above), so the token is what is refused. A fine-grained token
+      // never reaches another user's personal repo, collaborator or not: that case needs a classic one.
+      if (status === 403 || status === 404) return { push: false, detail: 'the token may not write here: a fine-grained token needs Contents: Read and write for this repository, and cannot reach a repository owned by another personal account even as a collaborator (use a classic token with public_repo or repo)' }
       return { push: true, detail: `could not confirm the token's grant: ${(err as Error).message}` }
     }
   }

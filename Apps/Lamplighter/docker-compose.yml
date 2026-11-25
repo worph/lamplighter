@@ -169,7 +169,7 @@ x-compose-app:
     en_us: |
       The CVE and dependency checks work at once. The LLM checks need a backend in **Settings → Inference**, then **Test**: preset is Claude Code's `query_claude` through this box's **Beacon** (the Claude Code listing ships with MCP off — enable it on boxes that should serve it), Claude Code's own OpenAI API with driver **text** (`http://claude-router:9091/v1`, model `sonnet`, its password as the bearer — no MCP needed), or any OpenAI-compatible API with function calling (OpenAI, OpenRouter, Ollama…).
 
-      1. **Settings → Forges**: add GitHub or Gitea with a fine-grained token (contents and pull requests: read and write), or a plain git remote prefix.
+      1. **Settings → Forges**: add GitHub or Gitea with a fine-grained token (contents and pull requests: read and write) — or, for a repo you are only a collaborator on, a classic token with `public_repo` (`repo` if private) — or a plain git remote prefix.
       2. **Repos → Add repositories**: enrol a few, then press **Round** on a check.
       3. **Activity**: approve, reject or merge what Lamplighter proposes.
 
@@ -216,7 +216,7 @@ x-casaos:
       en_us: |
         The CVE and dependency checks work at once. The LLM checks need a backend in **Settings → Inference**, then **Test**: preset is Claude Code's `query_claude` through this box's **Beacon** (the Claude Code listing ships with MCP off — enable it on boxes that should serve it), Claude Code's own OpenAI API with driver **text** (`http://claude-router:9091/v1`, model `sonnet`, its password as the bearer — no MCP needed), or any OpenAI-compatible API with function calling (OpenAI, OpenRouter, Ollama…).
 
-        1. **Settings → Forges**: add GitHub or Gitea with a fine-grained token (contents and pull requests: read and write), or a plain git remote prefix.
+        1. **Settings → Forges**: add GitHub or Gitea with a fine-grained token (contents and pull requests: read and write) — or, for a repo you are only a collaborator on, a classic token with `public_repo` (`repo` if private) — or a plain git remote prefix.
         2. **Repos → Add repositories**: enrol a few, then press **Round** on a check.
         3. **Activity**: approve, reject or merge what Lamplighter proposes.
 
