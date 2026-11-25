@@ -8,6 +8,7 @@ import { asOwnBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
 import { addItem, openItemFor, recordOverride, resolveFor } from '../activity/index.js'
 import { getRepo, type RepoRow } from '../repos/registry.js'
 import { deleteOwnBranch, fastForwardLine, LineMovedError, pushOwnBranch } from '../repos/push.js'
+import { renderMechanical, type Mechanical } from '../sandbox/validate.js'
 
 export type ProposalState =
   | 'drafting' | 'validating' | 'ready' | 'held' | 'submitted' | 'landed' | 'rejected' | 'failed' | 'stale' | 'reverted'
@@ -113,7 +114,9 @@ export async function afterReady(app: App, id: string): Promise<void> {
   const { getGroup, parseSettings } = await import('../repos/registry.js')
   const s = def ? resolveSettings(def, app.config.current, parseSettings(getGroup(app.db, repo.group_id).settings_json), parseSettings(repo.settings_json)) : undefined
   let waiting = ''
-  if (s?.auto_submit) {
+  // Passing validation is the approval only when it included the repository's own tests (§7.3).
+  if (s?.auto_submit && !testsOf(p)?.ran) waiting = ' (not auto-submitted: no tests ran on it)'
+  else if (s?.auto_submit) {
     const r = await autoSubmit(app, id)
     if (r === 'delivered') return
     waiting = r
@@ -210,10 +213,22 @@ export async function deliver(app: App, id: string, by: string): Promise<Proposa
   return mustGet(app, id)
 }
 
+function testsOf(p: ProposalRow): Mechanical | undefined {
+  if (!p.validation) return undefined
+  try {
+    return (JSON.parse(p.validation) as { mechanical?: Mechanical }).mechanical
+  } catch {
+    return undefined
+  }
+}
+
 function prBody(p: ProposalRow): string {
   if (p.sensitive) return 'Maintenance change prepared by Lamplighter.'
   const body = (p.summary ?? '').split('\n').slice(1).join('\n').trim()
-  return `${body}\n\n---\n_Prepared by Lamplighter (${p.check_kind}), validated by an independent review session. Proposal \`${p.id}\`._`
+  const tests = testsOf(p)
+  const evidence = tests?.ran ? `\n\n### Tests, base and proposal, each in a fresh sandbox\n\n${renderMechanical(tests)}` : ''
+  const by = tests?.ran ? "the repository's tests and an independent review session" : 'an independent review session'
+  return `${body}${evidence}\n\n---\n_Prepared by Lamplighter (${p.check_kind}), validated by ${by}. Proposal \`${p.id}\`._`
 }
 
 /** Bare-git review: fast-forward the line to the delivered branch, then remove the branch. */

@@ -199,4 +199,21 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE findings ADD COLUMN blocked_input TEXT;`,
   // Ready and auto-submitting, held back by the hourly delivery cap: the tick delivers it later.
   `ALTER TABLE proposals ADD COLUMN auto_waiting INTEGER NOT NULL DEFAULT 0;`,
+  // A repository command's result at one commit in one image (mechanical validation): a base is
+  // judged once, however many proposals sit on it.
+  `
+  CREATE TABLE command_runs (
+    repo_key TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    command TEXT NOT NULL,
+    image TEXT NOT NULL,
+    ok INTEGER NOT NULL,
+    exit INTEGER NOT NULL,
+    ms INTEGER NOT NULL,
+    timed_out INTEGER NOT NULL,
+    tail TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (repo_key, sha, command, image)
+  );
+  `,
 ]

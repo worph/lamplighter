@@ -105,12 +105,13 @@ async function bundle(worktree: string): Promise<Buffer> {
 }
 
 /**
- * Open a sandbox for one session on `worktree` (the host worktree at `head`). The container is
+ * Open a sandbox for one session on `worktree` (the host worktree at `head`). `env` overrides what
+ * the worktree declares (validation judges a proposal by its base's commands). The container is
  * removed by `dispose`; one left behind by a crash is reaped at the next boot (label).
  */
-export async function openSandbox(rt: SandboxRuntime, cfg: SandboxConfig, o: { sessionId: string; worktree: string; head: string }): Promise<SandboxWorkspace> {
+export async function openSandbox(rt: SandboxRuntime, cfg: SandboxConfig, o: { sessionId: string; worktree: string; head: string; env?: RepoEnv }): Promise<SandboxWorkspace> {
   await ensureInfra(rt, cfg)
-  const env = repoEnv(o.worktree)
+  const env = o.env ?? repoEnv(o.worktree)
   const image = env.image ?? cfg.base_image
   await rt.ensureImage(image)
   const vol = workVolume(o.sessionId)

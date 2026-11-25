@@ -174,6 +174,9 @@ describe.skipIf(!DOCKER)('a real sandbox', () => {
     const patch = await ws.exportPatch()
     expect(patch).toMatch(/\+\+\+ b\/src\/new\.js/)
     expect(patch).not.toMatch(/node_modules/)
+    // The backend commits, from the patch (invariant 1): it applies on the host worktree as is.
+    execFileSync('git', ['apply', '--index', '-'], { cwd: root, input: patch })
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: root }).toString()).toMatch(/A {2}src\/new\.js/)
 
     await ws.exec('ln -s /etc out && ln -s .git g', { timeoutMs: 10_000, maxBytes: 1000 })
     await expect(ws.resolve('out/passwd')).rejects.toThrow(/escapes/)

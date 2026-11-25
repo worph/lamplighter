@@ -16,6 +16,7 @@ import { authorPrompt, confirmPrompt, roundPrompt } from './prompt.js'
 import type { Session } from './session.js'
 import { execTool, toolSpecs } from '../tools/workspace.js'
 import { isSandbox, openWorkspace, SandboxError, type SessionWorkspace } from '../sandbox/index.js'
+import { mechanical, renderMechanical } from '../sandbox/validate.js'
 import { afterReady, failProposal, getProposal, type ProposalRow } from '../delivery/index.js'
 
 export interface QueueRow {
@@ -327,9 +328,11 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
 }
 
 /**
- * The fixer never judges its own work (invariant 2): a fresh session, which did not write the
- * change, reviews it as a diff. Any finding it records — a claimed fix that is not one, or a new
- * problem — fails the proposal (no regression, invariant 3).
+ * The fixer never judges its own work (invariant 2). First the repository's own tests, on base and
+ * on the proposal in fresh sandboxes (§7.3 step 1); then a fresh session, which did not write the
+ * change, reviews it as a diff. A test that passed on base and fails on the proposal, or any
+ * finding the review records — a claimed fix that is not one, or a new problem — fails the
+ * proposal (no regression, invariant 3).
  */
 export async function validate(app: App, p: ProposalRow, trigger: string): Promise<void> {
   const repo = getRepo(app.db, p.repo_key)
@@ -343,6 +346,16 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
   let session: Session | undefined
   try {
     insertRound(app, { id: roundId, repo: repo.key, def, kind: 'confirm', scope: 'diff', base: p.base_sha, head: p.head_sha!, proposal: p.id, trigger })
+    const tests = await mechanical(app, repo, p.base_sha, p.head_sha!)
+    const testsReport = `## Tests\n\n${renderMechanical(tests)}`
+    if (!tests.ok) {
+      const broken = tests.results.filter((r) => r.regression).map((r) => r.command)
+      const verdict = `${broken.map((c) => `\`${c}\``).join(', ')} pass${broken.length === 1 ? 'es' : ''} on the base and fail${broken.length === 1 ? 's' : ''} on the proposal`
+      app.db.prepare('UPDATE proposals SET validation = ?, updated_at = ? WHERE id = ?').run(JSON.stringify({ ok: false, round: roundId, verdict, remaining: [], mechanical: tests }), now(), p.id)
+      endRound(app, roundId, { status: 'done', summary: 'tests regressed', report: `# Validation of ${p.id}\n\n${verdict}\n\n${testsReport}` })
+      failProposal(app, p.id, `validation: ${verdict}`)
+      return
+    }
     worktree = await app.mirrors.addWorktree(repo, roundId, p.head_sha!)
     ws = await openWorkspace(app, { sessionId: roundId, worktree, head: p.head_sha! })
     session = app.sessions.open({
@@ -353,12 +366,12 @@ export async function validate(app: App, p: ProposalRow, trigger: string): Promi
     const remaining = session.findings
     const ok = remaining.length === 0 && session.done?.status !== 'cannot'
     const verdict = session.done?.text ?? result.text
-    const validation = { ok, round: roundId, verdict, remaining }
+    const validation = { ok, round: roundId, verdict, remaining, mechanical: tests }
     app.db.prepare('UPDATE proposals SET validation = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(validation), now(), p.id)
     endRound(app, roundId, {
       status: 'done',
       summary: ok ? 'validated' : `${remaining.length} problem(s) remain`,
-      report: `# Validation of ${p.id}\n\n${verdict}\n\n${remaining.map((f) => `- **${f.title}** (${f.category} @ ${f.anchor})\n  ${f.body}`).join('\n')}`,
+      report: `# Validation of ${p.id}\n\n${verdict}\n\n${remaining.map((f) => `- **${f.title}** (${f.category} @ ${f.anchor})\n  ${f.body}`).join('\n')}\n\n${testsReport}`,
       usage: result.usage,
     })
     if (!ok) {
