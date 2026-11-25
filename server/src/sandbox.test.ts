@@ -134,14 +134,25 @@ describe('seed upgrades', () => {
   const seed = fileURLToPath(new URL('../../seed', import.meta.url))
 
   it('replace an unedited older seed, and leave an edited one alone', async () => {
-    const { execFileSync: run } = await import('node:child_process')
-    const old = run('git', ['show', 'v0.6.2:seed/checks/cve.md'], { cwd: seed }).toString()
-    const dir = write(tmp(), { 'cve.md': old, 'deps.md': `${run('git', ['show', 'v0.6.2:seed/checks/deps.md'], { cwd: seed })}\nOur own rule.\n` })
-    const checks = new Checks(dir, seed)
+    // A seed folder of its own (CI checks out without history): today's seeds, plus an "older
+    // release" of cve.md and deps.md whose hashes its history.json lists.
+    const { cpSync, readFileSync } = await import('node:fs')
+    const { createHash } = await import('node:crypto')
+    const ownSeed = tmp()
+    cpSync(seed, ownSeed, { recursive: true })
+    const older = (kind: string) => readFileSync(join(seed, 'checks', `${kind}.md`), 'utf8').replace(/^revision: \d+$/m, 'revision: 1')
+    const hash = (t: string) => createHash('sha256').update(t).digest('hex')
+    const history = JSON.parse(readFileSync(join(seed, 'checks', 'history.json'), 'utf8')) as Record<string, string[]>
+    history['cve.md']!.push(hash(older('cve')))
+    history['deps.md']!.push(hash(older('deps')))
+    writeFileSync(join(ownSeed, 'checks', 'history.json'), JSON.stringify(history))
+    const dir = write(tmp(), { 'cve.md': older('cve'), 'deps.md': `${older('deps')}\nOur own rule.\n` })
+    const checks = new Checks(dir, ownSeed)
     expect(checks.upgraded).toEqual(['cve.md'])
     expect(checks.get('cve')!.revision).toBe(3)
+    expect(checks.get('deps')!.revision).toBe(1) // edited: the operator's, kept
     expect(checks.get('deps')!.prompt).toMatch(/Our own rule/)
-    expect(new Checks(dir, seed).upgraded).toEqual([]) // once upgraded, nothing more to do
+    expect(new Checks(dir, ownSeed).upgraded).toEqual([]) // once upgraded, nothing more to do
   })
 
   it('list every shipped seed in history.json (a release that changes one adds its hash)', async () => {
