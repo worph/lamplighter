@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -136,7 +136,6 @@ describe('seed upgrades', () => {
   it('replace an unedited older seed, and leave an edited one alone', async () => {
     // A seed folder of its own (CI checks out without history): today's seeds, plus an "older
     // release" of cve.md and deps.md whose hashes its history.json lists.
-    const { cpSync, readFileSync } = await import('node:fs')
     const { createHash } = await import('node:crypto')
     const ownSeed = tmp()
     cpSync(seed, ownSeed, { recursive: true })
@@ -157,7 +156,6 @@ describe('seed upgrades', () => {
 
   it('list every shipped seed in history.json (a release that changes one adds its hash)', async () => {
     const { createHash } = await import('node:crypto')
-    const { readdirSync, readFileSync } = await import('node:fs')
     const history = JSON.parse(readFileSync(join(seed, 'checks', 'history.json'), 'utf8')) as Record<string, string[]>
     for (const f of readdirSync(join(seed, 'checks')).filter((f) => f.endsWith('.md'))) {
       expect(history[f], f).toContain(createHash('sha256').update(readFileSync(join(seed, 'checks', f))).digest('hex'))

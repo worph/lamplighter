@@ -20,6 +20,11 @@ const READ_MAX = 5_000_000
 const GIT_MAX = 64 * 1024 * 1024
 const GIT_TIMEOUT_MS = 120_000
 const PATCH_MAX = 5_000_000
+/** Time allowed to bundle the worktree, and to clone that bundle inside the sandbox. */
+const BUNDLE_TIMEOUT_MS = 600_000
+const CLONE_TIMEOUT_MS = 600_000
+/** The most of a setup command's output kept (only its tail is reported on failure). */
+const SETUP_OUTPUT_MAX = 20_000
 /** Never part of a change, even in a repository that does not ignore them. */
 const NEVER_COMMITTED = [':(exclude,glob)**/node_modules/**', ':(exclude,glob)**/.venv/**', ':(exclude,glob)**/__pycache__/**']
 
@@ -97,7 +102,7 @@ async function bundle(worktree: string): Promise<Buffer> {
   const dir = mkdtempSync(join(tmpdir(), 'll-bundle-'))
   try {
     const file = join(dir, 'repo.bundle')
-    await git(['bundle', 'create', '-q', file, 'HEAD'], { cwd: worktree, timeoutMs: 600_000 })
+    await git(['bundle', 'create', '-q', file, 'HEAD'], { cwd: worktree, timeoutMs: BUNDLE_TIMEOUT_MS })
     return readFileSync(file)
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -131,11 +136,11 @@ export async function openSandbox(rt: SandboxRuntime, cfg: SandboxConfig, o: { s
     const clone = await rt.exec(
       container,
       ['sh', '-c', 'git clone -q /tmp/repo.bundle "$1" && cd "$1" && git remote remove origin && git checkout -q --detach "$2" && rm -f /tmp/repo.bundle', 'sh', REPO_DIR, o.head],
-      { cwd: '/work', timeoutMs: 600_000 },
+      { cwd: '/work', timeoutMs: CLONE_TIMEOUT_MS },
     )
     if (clone.code !== 0) throw new SandboxError(`cannot clone into the sandbox: ${clone.output.trim().slice(0, 500)}`, 'container')
     for (const cmd of env.setup) {
-      const r = await ws.exec(cmd, { timeoutMs: cfg.command_timeout_s * 1000, maxBytes: 20_000 })
+      const r = await ws.exec(cmd, { timeoutMs: cfg.command_timeout_s * 1000, maxBytes: SETUP_OUTPUT_MAX })
       if (r.code !== 0) throw new Error(`sandbox setup "${cmd}" failed (exit ${r.code}): ${r.output.slice(-2000)}`)
     }
     return ws

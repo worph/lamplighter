@@ -197,6 +197,7 @@ export async function deliver(app: App, id: string, by: string): Promise<Proposa
       try {
         pr = await api.openPr!(repo.owner, repo.name, { head: branch, base: repo.line, title: title(p), body: prBody(p) })
       } catch (err) {
+        // Best effort: a leftover own branch is harmless, and the PR failure is what the caller must see.
         await deleteOwnBranch(app.mirrors, repo, branch).catch(() => undefined)
         throw err
       }
@@ -251,6 +252,7 @@ export async function mergeBranch(app: App, id: string, by: string): Promise<Pro
     }
     throw err
   }
+  // Best effort: a leftover own branch is harmless; the merge is what gets recorded.
   await deleteOwnBranch(app.mirrors, repo, asOwnBranch(p.branch)).catch(() => undefined)
   markLanded(app, p, 'merged')
   recordOverride(app.db, { activity: openItemFor(app.db, id)?.id, proposed: { proposal: id }, decided: 'merged' })
@@ -263,6 +265,7 @@ export async function rejectProposal(app: App, id: string, reason: string, by: s
   const p = mustGet(app, id)
   if (!['ready', 'held', 'submitted'].includes(p.state)) throw new Error(`proposal is ${p.state}`)
   const repo = getRepo(app.db, p.repo_key)
+  // Best effort: a leftover own branch is harmless; the rejection is recorded either way.
   if (p.state === 'submitted') await deleteOwnBranch(app.mirrors, repo, asOwnBranch(p.branch)).catch(() => undefined)
   const item = openItemFor(app.db, id)
   recordOverride(app.db, { activity: item?.id, proposed: { proposal: id, summary: p.summary }, decided: 'rejected', reason })
@@ -315,6 +318,7 @@ export async function pollPullRequests(app: App): Promise<void> {
       const api = apiFor(app.db, repo)
       const state = await api.prState!(repo.owner, repo.name, ref.number)
       if (state === 'open') continue
+      // Best effort: a leftover own branch is harmless; the PR outcome is recorded either way.
       await deleteOwnBranch(app.mirrors, repo, asOwnBranch(p.branch)).catch(() => undefined)
       if (state === 'merged') {
         markLanded(app, p, 'merged')

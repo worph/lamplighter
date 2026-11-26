@@ -18,6 +18,8 @@ const MAX_CALLS = 8
 const RESULT_CHARS = 6000
 /** The most of a tool result kept in the stored row. */
 const STORED_RESULT_CHARS = 20_000
+/** Time allowed for one model answer in a chat turn. */
+const CHAT_TURN_TIMEOUT_S = 240
 const HISTORY = 24
 
 export interface ChatMessage {
@@ -79,7 +81,7 @@ export async function runTurn(app: App, text: string): Promise<ChatMessage[]> {
     const prompt = template.replace('{{CATALOGUE}}', catalogue()).replace('{{HISTORY}}', history(messages(app, thread)))
     let answer: { say?: string; call?: { tool: string; input?: Record<string, unknown> } | null } | undefined
     try {
-      const r = await driver.complete({ prompt, timeoutS: 240 })
+      const r = await driver.complete({ prompt, timeoutS: CHAT_TURN_TIMEOUT_S })
       answer = extractJson(r.text)
       if (!answer) {
         add(app, thread, 'assistant', r.text.trim() || '(no answer)')

@@ -156,6 +156,7 @@ export function forgeAlert(app: App, forgeId: string): void {
 
 /** Every credential on the forge re-checked, then its alert. */
 export async function checkForge(app: App, forgeId: string): Promise<void> {
+  // Best effort per credential: checkCredential records forge failures itself; one must not stop the others, and the next AUTH_CHECK_MS tick retries.
   for (const c of listCredentials(app.db, forgeId).filter((x) => x.token)) await checkCredential(app, c.id).catch(() => undefined)
   forgeAlert(app, forgeId)
 }
@@ -163,6 +164,7 @@ export async function checkForge(app: App, forgeId: string): Promise<void> {
 /** Every forge, re-checked — on boot and then periodically from the scheduler. */
 export async function checkAllForges(app: App): Promise<void> {
   const ids = (app.db.prepare("SELECT id FROM forges WHERE kind != 'git'").all() as { id: string }[]).map((r) => r.id)
+  // Best effort per forge: one must not stop the others, and the next AUTH_CHECK_MS tick retries.
   for (const id of ids) await checkForge(app, id).catch(() => undefined)
 }
 

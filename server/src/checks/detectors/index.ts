@@ -18,6 +18,10 @@ type Fetch = typeof fetch
 const FETCH_TIMEOUT_MS = 15_000
 /** Vulnerability details fetched per package; any others are only counted in the title. */
 const MAX_VULN_DETAILS = 5
+/** Packages per OSV querybatch request. */
+const OSV_BATCH_SIZE = 500
+/** Time allowed for one OSV querybatch request (a whole batch, so longer than FETCH_TIMEOUT_MS). */
+const OSV_BATCH_TIMEOUT_MS = 30_000
 
 interface LockPackage {
   version?: string
@@ -60,13 +64,13 @@ export async function osv(worktree: string, fetchImpl: Fetch = fetch): Promise<D
   const pkgs = lockPackages(JSON.parse(readFileSync(lockFile, 'utf8')))
   const entries = [...pkgs.entries()]
   const findings: RecordedFinding[] = []
-  for (let i = 0; i < entries.length; i += 500) {
-    const batch = entries.slice(i, i + 500)
+  for (let i = 0; i < entries.length; i += OSV_BATCH_SIZE) {
+    const batch = entries.slice(i, i + OSV_BATCH_SIZE)
     const res = await fetchImpl('https://api.osv.dev/v1/querybatch', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ queries: batch.map(([id, name]) => ({ package: { name, ecosystem: 'npm' }, version: id.slice(name.length + 1) })) }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(OSV_BATCH_TIMEOUT_MS),
     })
     if (!res.ok) throw new Error(`OSV querybatch → ${res.status}`)
     const body = (await res.json()) as { results: { vulns?: { id: string }[] }[] }

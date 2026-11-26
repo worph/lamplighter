@@ -106,6 +106,7 @@ export class GiteaForge implements ForgeApi {
   }
 
   async openPr(owner: string, name: string, a: { head: string; base: string; title: string; body: string }): Promise<PrRef> {
+    // A missing label is not worth failing a delivered PR over.
     const label = await this.labelId(owner, name).catch(() => undefined)
     const pr = await this.req<{ number: number; html_url: string }>(`/repos/${owner}/${name}/pulls`, {
       method: 'POST',

@@ -38,6 +38,10 @@ export interface ExecOpts {
 /** Docker's exit codes for `timeout` (124) and SIGKILL (137). */
 const TIMEOUT_CODES = new Set([124, 137])
 const GRACE_MS = 15_000
+/** Time allowed for a one-off helper container (runToEnd) unless the caller says otherwise. */
+const HELPER_TIMEOUT_MS = 120_000
+/** Output kept from an exec unless the caller sets maxBytes. */
+const EXEC_MAX_BYTES = 1_000_000
 
 /** Keep the first and last half of a stream, so a long log shows both how it started and how it ended. */
 class Capped {
@@ -261,7 +265,7 @@ export class SandboxRuntime {
   }
 
   /** Run a container to completion and return its exit code (a one-off helper). */
-  async runToEnd(spec: Docker.ContainerCreateOptions, timeoutMs = 120_000): Promise<number> {
+  async runToEnd(spec: Docker.ContainerCreateOptions, timeoutMs = HELPER_TIMEOUT_MS): Promise<number> {
     const id = await this.start(spec)
     const c = this.docker.getContainer(id)
     try {
@@ -311,7 +315,7 @@ export class SandboxRuntime {
    * the image has it, and on our side in any case (the container is removed at the session's end).
    */
   async exec(id: string, argv: string[], opts: ExecOpts = {}): Promise<ExecResult> {
-    const max = opts.maxBytes ?? 1_000_000
+    const max = opts.maxBytes ?? EXEC_MAX_BYTES
     const timeoutS = opts.timeoutMs ? Math.ceil(opts.timeoutMs / 1000) : 0
     const cmd = timeoutS
       ? ['sh', '-c', `command -v timeout >/dev/null 2>&1 && exec timeout -k 5 ${timeoutS} "$@"; exec "$@"`, 'sh', ...argv]
