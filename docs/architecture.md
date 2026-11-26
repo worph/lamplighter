@@ -88,20 +88,24 @@ These are the rules the design is built around. Code that breaks one is a bug ev
 ## 4. Components
 
 ```
-lamplighter (backend, one Node process)
-├── forges/        GitHub · Gitea · git adapters behind one ForgeClient interface
-├── registry/      repos, groups, inherited settings; forge discovery (list an org)
-├── mirror/        bare mirror clones on /DATA/repos, worktrees on /DATA/work
-├── triggers/      webhook receivers (GitHub, Gitea), poller (ls-remote for bare git), cron
-├── scheduler/     the queue, tiers, budget, slots, debounce
-├── rounds/        detector runs + the agent call for a round; report writer
+lamplighter (backend, one Node process)          server/src/
+├── forges/        GitHub · Gitea · git adapters behind one ForgeClient interface; credential resolution
+├── repos/         registry (repos, groups, inherited settings), access (write access, credential
+│                  check), mirror (bare clones on /DATA/repos, worktrees on /DATA/work), push
+├── hooks/         webhook receivers (GitHub, Gitea); polling and cron are in scheduler/
+├── scheduler/     the queue, tiers, budget, slots, debounce, polling, rotation
+├── checks/        check files, settings resolution; detectors/ (built-ins, SARIF/OSV readers)
+├── sessions/      session registry, prompts; engine: rounds, authoring, validation
 ├── findings/      fingerprinting, dedup, lifecycle, dismissals
-├── workshop/      proposals: authoring session, validation, delivery
-├── activity/      items, actions, the event log, web push
+├── delivery/      proposals after validation: deliver, merge, reject, revert, PR polling
+├── inference/     drivers for the inference backend (claude-code, OpenAI-compatible, text)
+├── tools/         the session workspace toolset (workspace) and the admin/chat tools (admin)
+├── activity/      items, actions, overrides (the event log is events.ts)
 ├── chat/          administrator chat (the Touchstone/Newsdesk loop)
-├── mcp/           admin MCP server + the session workspace (MCP and plain HTTP)
+├── mcp/           serves the admin MCP and the session workspace (MCP and plain HTTP)
 ├── sandbox/       session containers through the Docker API: clone in, exec, patch out, scanners, caches
-└── web/           React SPA: Chat · Repos · Activity · Settings
+├── api/           REST for the SPA
+└── web/           React SPA: Chat · Repos · Activity · Settings (web/src/)
 
 lamplighter-mcp    (beaconify sidecar: announces the admin MCP to Beacon)
 lamplighter        (AppShield sidecar: SSO in front of everything, /hooks included)
@@ -176,6 +180,9 @@ Default shape of the nine:
 | patterns | triage | diff, full | pr | weekly |
 | architecture | review | full | report | n/a |
 | security | review | diff, full | branch, sensitive: always | per-finding |
+
+**v1:** nothing reads `batch` yet, so there are no weekly cleanup proposals (§7.4). `sensitive` accepts `never | always` only; `when-reachable` is not built (§9.1).
+The `batch` column above is the design. See [implementation.md §7](implementation.md#7-next).
 
 The default delivery is only a seed: **every check accepts every mode** (`report`, `branch`, `pr`,
 `push`), chosen by the maintainer per check, group or repo. No check is report-only by nature.
@@ -282,6 +289,9 @@ per repo and submit one *cleanup* proposal (one commit per finding, so a reviewe
 one). `per-finding` is for things that must not wait (CVE, major bump) or must not be mixed with
 anything else (security).
 
+**v1:** not built. No check reads `batch`, there are no weekly cleanup proposals, and each
+proposal is delivered on its own. See [implementation.md §7](implementation.md#7-next).
+
 ---
 
 ## 8. Scheduling
@@ -346,7 +356,9 @@ cadence, sets the pace:
 | `push` | fast-forward the line | same | same |
 
 - **`push` is fast-forward only**, onto the tracked line, and every push has a **Revert** action in
-  Activity (which is itself a proposal, so it is validated too).
+  Activity (which is itself a proposal, so it is validated too). **v1:** Revert is not a proposal
+  and is not validated: `revertPush` commits a `git revert` of the pushed range on top of the line
+  and fast-forwards it directly, then reopens the findings.
 - **Branches are Lamplighter's to clean**: deleted when the PR is merged or closed, or when a
   `branch` item is resolved in Activity. Only branches under `lamplighter/` can be deleted by the
   client at all.
@@ -371,6 +383,10 @@ A finding is **sensitive** when its check says `sensitive: always` (security), o
   `sensitive` in Activity and the MCP.
 - Visibility is re-read from the forge before every delivery. A repo that went public since the
   round was queued is treated as public.
+
+**v1:** only `sensitive: always` exists (`never | always`); `when-reachable` is not built, so a
+cve finding is never sensitive. There is no GitHub advisory (GHSA) delivery: a sensitive proposal
+on a public repo is **held** on every forge, as on Gitea and bare git above. See [implementation.md §7](implementation.md#7-next).
 
 ---
 
@@ -540,28 +556,36 @@ and group policy pages show recent overrides beside the policy prose, so the ope
 the wording and watch the override rate fall.
 
 Web push (as Newsdesk and Touchstone do) for: sensitive findings, CVEs, PRs opened, alerts.
+**v1:** not built; nothing is pushed to a browser or device. See [implementation.md §7](implementation.md#7-next).
 
 ### 11.2 Chat
 
 The administrator chat on the front page reuses the Touchstone/Newsdesk loop as it is: the
 backend owns the loop and the tools, the model picks one tool per step, every step is a stored
 row, bounded calls and clock. It has the MCP's tools plus the decisive ones (approve, merge,
-push, revert, delete branch), each requiring a typed confirmation.
+push, revert, delete branch), each requiring a typed confirmation. **v1:** the chat-only tools are
+`approve_proposal` (which delivers, so it is also how a proposal is pushed), `merge_branch` and
+`revert_push` (`tools/admin.ts`). There is no separate push or delete-branch tool; branches are
+deleted by delivery itself (§9).
 
 ### 11.3 Admin MCP
 
-`/mcp/admin`, bearer-protected, announced by the `beaconify` sidecar. Proposed tools:
+`/mcp/admin`, bearer-protected, announced by the `beaconify` sidecar. The tools, as in
+`tools/admin.ts` (scope `both`: MCP and chat):
 
 | Tool | Kind |
 |---|---|
-| `list_repos`, `get_repo`, `list_findings`, `get_finding`, `get_round_report`, `list_activity`, `get_schedule`, `get_budget` | read |
-| `request_round(repo, check, scope?)` | request: queued, never run inline |
+| `list_repos`, `get_repo`, `list_findings`, `get_finding`, `get_round_report`, `list_activity`, `get_proposal`, `get_schedule`, `list_checks` | read |
+| `request_round(repo, check, scope?)`, `request_fix(repo, check)` | request: queued, never run inline |
 | `dismiss_finding(id, reason)`, `reopen_finding(id)` | judgement on a finding, not on code |
-| `get_policy`, `set_policy(group|repo, prose)`, `get_check`, `set_check_settings` | configure, with restore points (Newsdesk's config history) |
-| `add_repo`, `discover_repos(forge, owner)`, `set_repo_group` | registry |
+| `set_policy(group|repo, id, prose)`, `set_check_settings(global|group|repo, id?, check, settings)` | configure |
+| `add_repo` | registry |
 
-`reject_proposal(id, reason)` for an undelivered proposal. No approve, merge, push, delete or revert (invariant 9). A read-only mode drops everything
-below the first row.
+`reject_proposal(id, reason)` for an undelivered proposal. No approve, merge, push, delete or revert (invariant 9):
+those are the chat-only tools of §11.2.
+
+**v1:** `get_budget`, `get_policy`, `get_check`, `discover_repos`, `set_repo_group`, restore points
+for the configure tools, and a read-only mode are not built. See [implementation.md §7](implementation.md#7-next).
 
 ---
 

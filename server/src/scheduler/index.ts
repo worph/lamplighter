@@ -4,7 +4,7 @@ import { logEvent } from '../events.js'
 import { listRepos, getRepo, settingsFor, type RepoRow } from '../repos/registry.js'
 import { runAuthor, runRound, type QueueRow } from '../sessions/engine.js'
 import { pollPullRequests, retryAutoSubmits } from '../delivery/index.js'
-import { checkAllForges } from '../forges/auth.js'
+import { checkAllForges } from '../repos/access.js'
 import { openAlert } from '../activity/index.js'
 
 /**
@@ -66,6 +66,8 @@ export class Scheduler {
   private running = new Map<string, Promise<void>>()
   private lastPrPoll = 0
   private lastAuthCheck = 0
+  /** The credential re-check in flight, if any: it runs beside the tick, never inside it. */
+  private authCheck: Promise<void> | undefined
 
   constructor(private readonly app: App) {
     // A job that was running when the process died never finished: put it back in line.
@@ -101,11 +103,16 @@ export class Scheduler {
       await this.poll()
       if (cfg.rotation) this.rotate()
       // Tokens expire and get revoked: re-check every half hour (and on the first tick), so the
-      // alert opens before a delivery finds out.
-      if (Date.now() - this.lastAuthCheck > AUTH_CHECK_MS) {
+      // alert opens before a delivery finds out. It asks the forge about every repo, so it is not
+      // awaited here: dispatch does not wait for it, and a check still in flight is not restarted.
+      if (!this.authCheck && Date.now() - this.lastAuthCheck > AUTH_CHECK_MS) {
         this.lastAuthCheck = Date.now()
         // Best effort: a failed check is retried on the next due tick.
-        await checkAllForges(this.app).catch(() => undefined)
+        this.authCheck = checkAllForges(this.app)
+          .catch(() => undefined)
+          .finally(() => {
+            this.authCheck = undefined
+          })
       }
       if (Date.now() - this.lastPrPoll > PR_POLL_MS) {
         this.lastPrPoll = Date.now()

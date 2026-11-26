@@ -1,4 +1,4 @@
-import type { RecordedFinding } from '../../sessions/session.js'
+import type { RecordedFinding } from '../../findings/index.js'
 import type { DetectorResult } from './index.js'
 
 /**

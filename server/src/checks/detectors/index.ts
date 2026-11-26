@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { RecordedFinding } from '../../sessions/session.js'
+import type { RecordedFinding } from '../../findings/index.js'
 
 /**
  * Deterministic detectors, run by Lamplighter itself on the worktree. No model, no session, no

@@ -37,8 +37,8 @@ server/src/
   db/                 openDb + migrations
   checks/             check files, settings resolution (default → config → group → repo)
   checks/detectors/   osv (package-lock.json → api.osv.dev), npm-outdated (registry latest)
-  forges/             gitcli, refs (OwnBranch brand, trailers), github, gitea, git, http
-  repos/              registry, mirror (bare clone, fetch, worktrees, loop guard), push (the only ref writes)
+  forges/             gitcli, refs (OwnBranch brand, trailers), github, gitea, git, http, auth (credential resolution)
+  repos/              registry (reads and the settings/policy writes), access (write access, credential check, forge alert), mirror (bare clone, fetch, worktrees, loop guard), push (the only ref writes)
   inference/          types, claude-code (MCP query_claude), openai (tool loop), text (tool loop without function calling), driverFor, extractJson
   tools/              workspace (the session toolset), admin (the MCP + chat registry)
   sessions/           session registry, prompts, engine (round, author, validate)
@@ -120,7 +120,7 @@ read/write; only the monitored repositories). The exception is a repo owned by a
 account where the token's account is only a collaborator: fine-grained tokens cannot reach it, so
 that credential is a classic token with `public_repo` (or `repo` for private ones) and no `workflow`. They are stored in the database and **write-only**:
 no route returns them (`PUT|DELETE /api/v1/credentials/:id/token`), and no chat or admin-MCP tool
-can set one. Each save is checked in the same response (`forges/auth.ts`): whose token it is, and
+can set one. Each save is checked in the same response (`repos/access.ts`): whose token it is, and
 whether it may push to each monitored repo on its forge (account role, then the token's own
 Contents grant). The checks rerun every 30 minutes.
 
@@ -245,6 +245,9 @@ Releases: tag, build and push `ghcr.io/worph/lamplighter:<v>`, then bump the ima
 | Sandbox hardening (architecture §13.1): egress allowlist, gVisor, body-filtering proxy, cache LRU | the sandbox is at self-hosted-CI level; hosted coding agents add these |
 | GitHub **private advisory** delivery for sensitive fixes on public repos | replaces "held + typed confirmation" |
 | **Batching** (`weekly` cleanup PRs, one commit per finding) | review attention at fleet scale |
+| `sensitive: when-reachable` (cve triage rating reachability) | today only `never` and `always` |
+| Revert as a validated proposal | today `revertPush` reverts and fast-forwards directly |
+| Admin MCP: `get_budget`, `get_policy`, `get_check`, `discover_repos`, `set_repo_group`, restore points, read-only mode | architecture §11.3 |
 | Read `check_status.recommendedMaxConcurrent` | slots that follow the shared backend's memory |
 | Web push for sensitive findings, PRs and alerts | as Newsdesk and Touchstone |
 | Override review beside the policy prose | tighten policy from real decisions |

@@ -2,7 +2,16 @@ import { createHash } from 'node:crypto'
 import type { Db } from '../db/index.js'
 import { newId, now } from '../db/index.js'
 import { git } from '../forges/gitcli.js'
-import type { RecordedFinding } from '../sessions/session.js'
+
+/** A finding as a round reports it (a model's `record_finding`, or a detector), before reconcile. */
+export interface RecordedFinding {
+  category: string
+  anchor: string
+  title: string
+  body: string
+  severity: 'critical' | 'major' | 'minor'
+  existing_id?: string
+}
 
 export type FindingState = 'open' | 'dismissed' | 'proposed' | 'fixed' | 'gone'
 
@@ -165,4 +174,32 @@ export function lastDismissal(db: Db, id: string): { reason: string; by: string;
   return db.prepare('SELECT reason, by, at FROM dismissals WHERE finding_id = ? ORDER BY at DESC LIMIT 1').get(id) as
     | { reason: string; by: string; at: string }
     | undefined
+}
+
+// ── proposal-driven transitions (§6.2): open → proposed → fixed | back to open ───────────────
+
+/** A proposal took these findings on. */
+export function markProposed(db: Db, ids: string[], proposalId: string, t: string = now()): void {
+  const mark = db.prepare("UPDATE findings SET state = 'proposed', proposal_id = ?, updated_at = ? WHERE id = ?")
+  for (const id of ids) mark.run(proposalId, t, id)
+}
+
+/** The proposal landed: its finding is fixed (only while that proposal still holds it). */
+export function markFixed(db: Db, id: string, proposalId: string, t: string = now()): void {
+  db.prepare("UPDATE findings SET state = 'fixed', updated_at = ? WHERE id = ? AND proposal_id = ?").run(t, id, proposalId)
+}
+
+/**
+ * Hand a finding back to open. `block` remembers that this input was tried (invariant 7), so it
+ * is not proposed again until what it is about changes. With `proposalId`, only while that
+ * proposal still holds it.
+ */
+export function returnToOpen(db: Db, id: string, opts: { proposalId?: string; block: boolean; t?: string }): void {
+  const blocked = opts.block ? 'input_hash' : 'blocked_input'
+  const t = opts.t ?? now()
+  if (opts.proposalId !== undefined) {
+    db.prepare(`UPDATE findings SET state = 'open', proposal_id = NULL, blocked_input = ${blocked}, updated_at = ? WHERE id = ? AND proposal_id = ?`).run(t, id, opts.proposalId)
+  } else {
+    db.prepare(`UPDATE findings SET state = 'open', proposal_id = NULL, blocked_input = ${blocked}, updated_at = ? WHERE id = ?`).run(t, id)
+  }
 }

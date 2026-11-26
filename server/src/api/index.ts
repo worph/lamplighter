@@ -6,13 +6,11 @@ import { now } from '../db/index.js'
 import { listEvents, logEvent } from '../events.js'
 import { dismiss, lastDismissal, listFindings, reopen } from '../findings/index.js'
 import { credentialRow, forgeApi, forgeRow, listCredentials, listForges } from '../forges/index.js'
-import {
-  addCredential, asAnyCredential, assertPinnable, checkCredential, checkForge, credentialFor, credentialView, forgeAlert, forgeView,
-  normalizeToken, patchCredential, removeCredential, setCredentialToken, writeAccess,
-} from '../forges/auth.js'
+import { addCredential, asAnyCredential, assertPinnable, credentialFor, credentialView, forgeView, normalizeToken, patchCredential } from '../forges/auth.js'
+import { checkCredential, checkForge, forgeAlert, removeCredential, setCredentialToken, writeAccess } from '../repos/access.js'
 import { driverFor } from '../inference/index.js'
 import { getItem, listItems, resolveItem } from '../activity/index.js'
-import { addRepo, getRepo, listGroups, listRepos, parseSettings, getGroup, settingsFor } from '../repos/registry.js'
+import { addRepo, getRepo, listGroups, listRepos, parseSettings, getGroup, setCheckSettings, setPolicy, settingsFor } from '../repos/registry.js'
 import { probeSandbox } from '../sandbox/index.js'
 import { enqueueRound } from '../scheduler/index.js'
 import { maybePropose } from '../sessions/engine.js'
@@ -142,7 +140,11 @@ export function registerApi(f: FastifyInstance, app: App): void {
       .parse(req.body)
     if (body.group_id) getGroup(app.db, body.group_id)
     if (body.credential_id !== undefined) assertPinnable(app.db, body.credential_id, r.forge_id)
-    for (const [col, v] of Object.entries(body)) if (v !== undefined) app.db.prepare(`UPDATE repos SET ${col} = ? WHERE key = ?`).run(v, key)
+    for (const [col, v] of Object.entries(body)) {
+      if (v === undefined) continue
+      if (col === 'policy') setPolicy(app.db, 'repo', key, v as string)
+      else app.db.prepare(`UPDATE repos SET ${col} = ? WHERE key = ?`).run(v, key)
+    }
     if (body.credential_id !== undefined || body.group_id) {
       logEvent(app.db, { level: 'warn', code: 'REPO_CREDENTIAL', repo: key, message: `credential: ${credentialOf(app, getRepo(app.db, key))?.label ?? 'none'} (${body.credential_id === undefined ? 'group changed' : body.credential_id ? 'pinned' : 'unpinned'} by operator)` })
       forgeAlert(app, r.forge_id)
@@ -184,11 +186,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
     const { key, check } = req.params as { key: string; check: string }
     const r = getRepo(app.db, key)
     const settings = checkSettingsSchema.nullable().parse(req.body)
-    const s = parseSettings(r.settings_json) as { checks?: Record<string, unknown> }
-    s.checks = { ...(s.checks ?? {}) }
-    if (settings === null || Object.keys(settings).length === 0) delete s.checks[check]
-    else s.checks[check] = settings
-    app.db.prepare('UPDATE repos SET settings_json = ? WHERE key = ?').run(JSON.stringify(s), key)
+    setCheckSettings(app.db, 'repo', r.key, check, settings, { replace: true })
     return { ok: true }
   })
 
@@ -367,7 +365,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
     getGroup(app.db, id)
     const b = z.object({ name: z.string().optional(), policy: z.string().optional(), credential_id: z.string().nullable().optional() }).parse(req.body)
     if (b.name !== undefined) app.db.prepare('UPDATE groups SET name = ? WHERE id = ?').run(b.name, id)
-    if (b.policy !== undefined) app.db.prepare('UPDATE groups SET policy = ? WHERE id = ?').run(b.policy, id)
+    if (b.policy !== undefined) setPolicy(app.db, 'group', id, b.policy)
     if (b.credential_id !== undefined) {
       assertPinnable(app.db, b.credential_id)
       app.db.prepare('UPDATE groups SET credential_id = ? WHERE id = ?').run(b.credential_id, id)

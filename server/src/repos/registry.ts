@@ -2,6 +2,7 @@ import { resolveSettings, type CheckDef } from '../checks/index.js'
 import type { App } from '../context.js'
 import type { Db } from '../db/index.js'
 import { now } from '../db/index.js'
+import { logEvent } from '../events.js'
 import { forgeApi, forgeRow } from '../forges/index.js'
 import { asAnyCredential } from '../forges/auth.js'
 
@@ -110,4 +111,47 @@ export function parseSettings(json: string): Record<string, unknown> {
 export function settingsFor(app: App, repo: RepoRow, def: CheckDef) {
   const group = getGroup(app.db, repo.group_id)
   return resolveSettings(def, app.config.current, parseSettings(group.settings_json), parseSettings(repo.settings_json))
+}
+
+// ── writes: one seam for every surface (REST, chat, admin MCP) ───────────────────────────
+
+/**
+ * Write one check's settings on a group or a repo. `replace` swaps the check's entry for
+ * `settings` (`null` or `{}` removes it); otherwise `settings` is merged into it. With `by`, the
+ * change is logged as `SETTINGS_SET`.
+ */
+export function setCheckSettings(
+  db: Db,
+  level: 'group' | 'repo',
+  id: string,
+  check: string,
+  settings: Record<string, unknown> | null,
+  opts: { replace: boolean; by?: string },
+): void {
+  const table = level === 'group' ? 'groups' : 'repos'
+  const col = level === 'group' ? 'id' : 'key'
+  const row = db.prepare(`SELECT settings_json FROM ${table} WHERE ${col} = ?`).get(id) as { settings_json: string } | undefined
+  if (!row) throw new Error(`no ${level} ${id}`)
+  const s = parseSettings(row.settings_json) as { checks?: Record<string, unknown> }
+  if (opts.replace) {
+    s.checks = { ...(s.checks ?? {}) }
+    if (settings === null || Object.keys(settings).length === 0) delete s.checks[check]
+    else s.checks[check] = settings
+  } else {
+    s.checks = { ...(s.checks ?? {}), [check]: { ...((s.checks?.[check] as object) ?? {}), ...settings } }
+  }
+  db.prepare(`UPDATE ${table} SET settings_json = ? WHERE ${col} = ?`).run(JSON.stringify(s), id)
+  if (opts.by) logEvent(db, { code: 'SETTINGS_SET', repo: level === 'repo' ? id : null, message: `${check} settings (${level} ${id}) changed by ${opts.by}: ${JSON.stringify(settings)}` })
+}
+
+/** Replace the prose policy of a group or a repo. With `by`, the change is logged as `POLICY_SET`. */
+export function setPolicy(db: Db, target: 'group' | 'repo', id: string, policy: string, by?: string): void {
+  if (target === 'group') {
+    getGroup(db, id)
+    db.prepare('UPDATE groups SET policy = ? WHERE id = ?').run(policy, id)
+  } else {
+    getRepo(db, id)
+    db.prepare('UPDATE repos SET policy = ? WHERE key = ?').run(policy, id)
+  }
+  if (by) logEvent(db, { code: 'POLICY_SET', repo: target === 'repo' ? id : null, message: `${target} ${id} policy changed by ${by}` })
 }

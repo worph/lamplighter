@@ -2,9 +2,9 @@ import type { CheckDef } from '../checks/index.js'
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
-import { lastDismissal, reconcile, type FindingRow } from '../findings/index.js'
+import { lastDismissal, markProposed, reconcile, type FindingRow } from '../findings/index.js'
 import { forgeRow } from '../forges/index.js'
-import { commitIdentity, writeAccess } from '../forges/auth.js'
+import { commitIdentity, writeAccess } from '../repos/access.js'
 import { git } from '../forges/gitcli.js'
 import { ownBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
 import { driverFor } from '../inference/index.js'
@@ -287,8 +287,7 @@ export async function runAuthor(app: App, job: QueueRow): Promise<string | undef
        VALUES (?, ?, ?, ?, ?, 'drafting', ?, ?, ?, ?, ?)`,
     )
     .run(pid, repo.key, def.kind, branch, base, delivery, sensitive ? 1 : 0, JSON.stringify(findings.map((f) => f.id)), t, t)
-  const mark = app.db.prepare("UPDATE findings SET state = 'proposed', proposal_id = ?, updated_at = ? WHERE id = ?")
-  for (const f of findings) mark.run(pid, t, f.id)
+  markProposed(app.db, findings.map((f) => f.id), pid, t)
   logEvent(app.db, { code: 'PROPOSAL_STARTED', repo: repo.key, message: `${def.kind}: fixing ${findings.length} finding(s)`, detail: { proposal: pid } })
 
   const roundId = newId('r')

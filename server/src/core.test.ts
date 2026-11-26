@@ -400,7 +400,8 @@ describe('forge credentials and write access', () => {
   })
 
   it('blocks fixing without a token, and until the token may push to the repo', async () => {
-    const { addCredential, setCredentialToken, writeAccess, deliveryBlocker, commitIdentity, forgeView } = await import('./forges/auth.js')
+    const { addCredential, forgeView } = await import('./forges/auth.js')
+    const { setCredentialToken, writeAccess, deliveryBlocker, commitIdentity } = await import('./repos/access.js')
     const { forgeRow } = await import('./forges/index.js')
     const { db, app, repoRow } = setup()
     expect(writeAccess(app, repoRow())).toMatchObject({ ok: false, why: expect.stringMatching(/no credential/) })
@@ -440,7 +441,8 @@ describe('forge credentials and write access', () => {
   })
 
   it('gives each repo the credential that may push there, unless one is pinned', async () => {
-    const { addCredential, setCredentialToken, credentialFor, writeAccess, commitIdentity, patchCredential } = await import('./forges/auth.js')
+    const { addCredential, credentialFor, patchCredential } = await import('./forges/auth.js')
+    const { setCredentialToken, writeAccess, commitIdentity } = await import('./repos/access.js')
     const { db, app, addRepo, repoRow } = setup()
     addRepo('acme', 'site')
     const me = addCredential(app, 'github', { label: 'Me' })

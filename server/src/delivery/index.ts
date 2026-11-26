@@ -1,8 +1,10 @@
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
+import { markFixed, returnToOpen } from '../findings/index.js'
 import { forgeRow } from '../forges/index.js'
-import { apiFor, assertCanDeliver, commitIdentity, deliveryBlocker } from '../forges/auth.js'
+import { apiFor } from '../forges/auth.js'
+import { assertCanDeliver, commitIdentity, deliveryBlocker } from '../repos/access.js'
 import { git } from '../forges/gitcli.js'
 import { asOwnBranch, TRAILER_CHECK, TRAILER_ROUND } from '../forges/refs.js'
 import { addItem, openItemFor, recordOverride, resolveFor } from '../activity/index.js'
@@ -72,11 +74,8 @@ function markStale(app: App, p: ProposalRow, message: string) {
 function releaseFindings(app: App, p: ProposalRow, to: 'open' | 'fixed', block: boolean) {
   const t = now()
   for (const id of JSON.parse(p.finding_ids) as string[]) {
-    if (to === 'fixed') app.db.prepare("UPDATE findings SET state = 'fixed', updated_at = ? WHERE id = ? AND proposal_id = ?").run(t, id, p.id)
-    else
-      app.db
-        .prepare(`UPDATE findings SET state = 'open', proposal_id = NULL, blocked_input = ${block ? 'input_hash' : 'blocked_input'}, updated_at = ? WHERE id = ? AND proposal_id = ?`)
-        .run(t, id, p.id)
+    if (to === 'fixed') markFixed(app.db, id, p.id, t)
+    else returnToOpen(app.db, id, { proposalId: p.id, block, t })
   }
 }
 
@@ -298,9 +297,7 @@ export async function revertPush(app: App, id: string, by: string): Promise<Prop
   }
   setState(app, id, 'reverted')
   const t = now()
-  for (const fid of JSON.parse(p.finding_ids) as string[]) {
-    app.db.prepare("UPDATE findings SET state = 'open', proposal_id = NULL, blocked_input = input_hash, updated_at = ? WHERE id = ?").run(t, fid)
-  }
+  for (const fid of JSON.parse(p.finding_ids) as string[]) returnToOpen(app.db, fid, { block: true, t })
   recordOverride(app.db, { activity: openItemFor(app.db, id)?.id, proposed: { proposal: id }, decided: 'reverted' })
   resolveFor(app.db, id, 'reverted')
   logEvent(app.db, { code: 'REVERTED', repo: repo.key, message: `${p.check_kind} push reverted by ${by}`, detail: { proposal: id } })

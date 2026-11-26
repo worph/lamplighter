@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { CheckDef } from '../checks/index.js'
+import type { RecordedFinding } from '../findings/index.js'
 import type { RepoRow } from '../repos/registry.js'
 import type { Workspace } from './workspace.js'
 
@@ -8,14 +9,7 @@ export type SessionKind = 'round' | 'author' | 'confirm'
 /** A token outlives its session's clock by this much, so a late `finish` still lands. */
 export const SESSION_SLACK_S = 600
 
-export interface RecordedFinding {
-  category: string
-  anchor: string
-  title: string
-  body: string
-  severity: 'critical' | 'major' | 'minor'
-  existing_id?: string
-}
+export type { RecordedFinding }
 
 /**
  * One model session against one worktree. Lives in memory only: the token is minted here, handed

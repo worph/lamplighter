@@ -6,10 +6,10 @@ import type { App } from '../context.js'
 import { listEvents, logEvent } from '../events.js'
 import { dismiss, getFinding, lastDismissal, listFindings, reopen } from '../findings/index.js'
 import { listItems } from '../activity/index.js'
-import { addRepo, getRepo, listRepos, parseSettings, getGroup } from '../repos/registry.js'
+import { addRepo, getRepo, listRepos, parseSettings, setCheckSettings, setPolicy } from '../repos/registry.js'
 import { enqueueRound } from '../scheduler/index.js'
 import { maybePropose } from '../sessions/engine.js'
-import { writeAccess } from '../forges/auth.js'
+import { writeAccess } from '../repos/access.js'
 import { deliver, getProposal, mergeBranch, rejectProposal, revertPush } from '../delivery/index.js'
 
 /**
@@ -178,14 +178,7 @@ export const ADMIN_TOOLS: AdminTool[] = [
     description: 'Replace the prose policy of a group or a repository. Every check’s prompt carries it.',
     schema: z.object({ target: z.enum(['group', 'repo']), id: z.string(), policy: z.string().max(20000) }),
     async run(app, { target, id, policy }, caller) {
-      if (target === 'group') {
-        getGroup(app.db, id)
-        app.db.prepare('UPDATE groups SET policy = ? WHERE id = ?').run(policy, id)
-      } else {
-        getRepo(app.db, id)
-        app.db.prepare('UPDATE repos SET policy = ? WHERE key = ?').run(policy, id)
-      }
-      logEvent(app.db, { code: 'POLICY_SET', repo: target === 'repo' ? id : null, message: `${target} ${id} policy changed by ${caller}` })
+      setPolicy(app.db, target, id, policy, caller)
       return { ok: true }
     },
   }),
@@ -196,17 +189,11 @@ export const ADMIN_TOOLS: AdminTool[] = [
     async run(app, { level, id, check, settings }, caller) {
       if (level === 'global') {
         app.config.update(['checks', check], settings)
+        logEvent(app.db, { code: 'SETTINGS_SET', repo: null, message: `${check} settings (${level}${id ? ` ${id}` : ''}) changed by ${caller}: ${JSON.stringify(settings)}` })
       } else {
         if (!id) throw new Error('id is required for group or repo')
-        const table = level === 'group' ? 'groups' : 'repos'
-        const col = level === 'group' ? 'id' : 'key'
-        const row = app.db.prepare(`SELECT settings_json FROM ${table} WHERE ${col} = ?`).get(id) as { settings_json: string } | undefined
-        if (!row) throw new Error(`no ${level} ${id}`)
-        const s = parseSettings(row.settings_json) as { checks?: Record<string, unknown> }
-        s.checks = { ...(s.checks ?? {}), [check]: { ...((s.checks?.[check] as object) ?? {}), ...settings } }
-        app.db.prepare(`UPDATE ${table} SET settings_json = ? WHERE ${col} = ?`).run(JSON.stringify(s), id)
+        setCheckSettings(app.db, level, id, check, settings, { replace: false, by: caller })
       }
-      logEvent(app.db, { code: 'SETTINGS_SET', repo: level === 'repo' ? id : null, message: `${check} settings (${level}${id ? ` ${id}` : ''}) changed by ${caller}: ${JSON.stringify(settings)}` })
       return { ok: true }
     },
   }),
