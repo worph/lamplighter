@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ago, api, type CheckSettings, type Finding, type RepoDetail } from '../api'
-import { Badge, Button, Card, Empty, ErrorNote, LampDot, Sha, inputCls, severityTone, stateTone } from '../components/ui'
+import { ago, api, type CheckSettings, type Decision, type Finding, type RepoDetail } from '../api'
+import { AdmissionSelect, Badge, Button, Card, Empty, ErrorNote, LampDot, Sha, inputCls, severityTone, stateTone } from '../components/ui'
 
 export default function Repo() {
   const key = decodeURIComponent(useParams().key!)
@@ -69,7 +69,7 @@ export default function Repo() {
               {r.rounds.map((x) => (
                 <li key={x.id} className="py-1.5 flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <Link to={`/rounds/${x.id}`} className="hover:underline">{x.check_kind} <span className="text-stone-500">{x.kind === 'round' ? x.scope : x.kind === 'author' ? 'fix' : 'validation'}</span></Link>
+                    <Link to={`/rounds/${x.id}`} className="hover:underline">{x.kind === 'arbitrate' ? 'admission' : x.check_kind} <span className="text-stone-500">{x.kind === 'round' ? x.scope : x.kind === 'author' ? 'fix' : x.kind === 'arbitrate' ? 'arbiter' : 'validation'}</span></Link>
                     <div className="text-xs text-stone-500 truncate">{x.error ?? x.summary ?? ''}</div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0"><Badge tone={stateTone(x.status)}>{x.status}</Badge><span className="text-xs text-stone-500">{ago(x.started_at)}</span></div>
@@ -114,6 +114,7 @@ function ChecksCard({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
               <th className="px-2 py-2 font-medium">Delivery</th>
               <th className="px-2 py-2 font-medium" title="Start fixing by itself after a round">Armed</th>
               <th className="px-2 py-2 font-medium" title="Validation passing is the approval">Auto-submit</th>
+              <th className="px-2 py-2 font-medium" title="Which findings become work: always (by rule), the arbiter (with its lean), or manual (only when you take one)">Admission</th>
               <th className="px-2 py-2 font-medium">Last round</th>
               <th className="px-4 py-2 font-medium text-right">Run</th>
             </tr>
@@ -126,7 +127,7 @@ function ChecksCard({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
               return (
                 <tr key={c.kind} className="border-b last:border-0 border-stone-100 dark:border-stone-800/70">
                   <td className="px-4 py-2">
-                    <div className="flex items-center gap-2"><LampDot state={lamp?.lamp ?? 'unlit'} count={lamp?.open} /> <span className="font-medium">{c.title}</span></div>
+                    <div className="flex items-center gap-2"><LampDot state={lamp?.lamp ?? 'unlit'} count={lamp?.open} later={lamp?.later} /> <span className="font-medium">{c.title}</span></div>
                     <div className="text-[11px] text-stone-500 ml-5">{c.kind} · {c.agent === 'none' ? 'detector' : 'LLM review'}{overridden && <> · <button className="underline" onClick={() => set.mutate({ check: c.kind, s: null })}>reset to group/global</button></>}</div>
                   </td>
                   <td className="px-2 py-2"><input type="checkbox" checked={c.settings.enabled} onChange={(e) => patch(c.kind, { enabled: e.target.checked })} /></td>
@@ -137,6 +138,7 @@ function ChecksCard({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
                   </td>
                   <td className="px-2 py-2"><input type="checkbox" disabled={blocked} title={blocked ? 'blocked: no write access' : undefined} checked={c.settings.armed} onChange={(e) => patch(c.kind, { armed: e.target.checked })} /></td>
                   <td className="px-2 py-2"><input type="checkbox" disabled={blocked} title={blocked ? 'blocked: no write access' : undefined} checked={c.settings.auto_submit} onChange={(e) => patch(c.kind, { auto_submit: e.target.checked })} /></td>
+                  <td className="px-2 py-2"><AdmissionSelect value={c.settings} onChange={(p) => patch(c.kind, p)} /></td>
                   <td className="px-2 py-2 text-xs text-stone-500">{lamp?.status ? <Badge tone={stateTone(lamp.status)}>{lamp.status}</Badge> : null} {ago(lamp?.last)}</td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">
                     <Button className="!px-2 !py-1 text-xs" onClick={() => round.mutate({ check: c.kind, scope: 'full' })}>Round</Button>{' '}
@@ -153,23 +155,51 @@ function ChecksCard({ r, refresh }: { r: RepoDetail; refresh: () => void }) {
   )
 }
 
+const ACTIVE = ['open', 'admitted', 'proposed']
+const NOT_NOW = ['deferred', 'declined']
+const STATE_LABEL: Record<string, string> = { open: 'not judged yet', deferred: 'not now' }
+const DECIDED: Record<Decision['decision'], string> = { admit: 'Admitted', defer: 'Not now', decline: 'Declined', dismiss: 'Dismissed', take: 'Taken', reopen: 'Reopened' }
+const BY: Record<Decision['by'], string> = { rule: 'by rule', arbiter: 'by the arbiter', user: 'by', mcp: 'over MCP by' }
+
+/** Who decided what, and on which precedents: the reason a finding is (or is not) work. */
+function DecisionNote({ d }: { d: Decision }) {
+  const cited = (() => {
+    try {
+      return JSON.parse(d.precedents) as string[]
+    } catch {
+      return []
+    }
+  })()
+  const who = d.by === 'user' || d.by === 'mcp' ? `${BY[d.by]} ${d.actor}` : BY[d.by]
+  return (
+    <p className="text-xs text-violet-700 dark:text-violet-300">
+      {DECIDED[d.decision]} {who} {ago(d.at)}: “{d.rationale}”
+      {cited.length ? <span className="text-stone-500"> · relied on {cited.join(', ')}</span> : null}
+    </p>
+  )
+}
+
 function FindingsCard({ findings, refresh }: { findings: Finding[]; refresh: () => void }) {
-  const [show, setShow] = useState<'active' | 'all'>('active')
+  const [show, setShow] = useState<'active' | 'later' | 'all'>('active')
   const [open, setOpen] = useState<string>()
   const dismiss = useMutation({ mutationFn: (a: { id: string; reason: string }) => api.dismiss(a.id, a.reason), onSuccess: refresh })
   const reopen = useMutation({ mutationFn: (id: string) => api.reopen(id), onSuccess: refresh })
-  const list = show === 'active' ? findings.filter((f) => f.state === 'open' || f.state === 'proposed') : findings
+  const take = useMutation({ mutationFn: (id: string) => api.take(id), onSuccess: refresh })
+  const active = findings.filter((f) => ACTIVE.includes(f.state))
+  const later = findings.filter((f) => NOT_NOW.includes(f.state))
+  const list = show === 'active' ? active : show === 'later' ? later : findings
   return (
     <Card
-      title={`Findings (${findings.filter((f) => f.state === 'open' || f.state === 'proposed').length} active)`}
+      title={`Findings (${active.length} active${later.length ? ` · ${later.length} not now` : ''})`}
       actions={
-        <select className={`${inputCls} !w-auto !py-1 text-xs`} value={show} onChange={(e) => setShow(e.target.value as 'active' | 'all')}>
-          <option value="active">open & proposed</option>
+        <select className={`${inputCls} !w-auto !py-1 text-xs`} value={show} onChange={(e) => setShow(e.target.value as 'active' | 'later' | 'all')}>
+          <option value="active">active: admitted, in a proposal, not judged yet</option>
+          <option value="later">not now: deferred and declined</option>
           <option value="all">all, including dismissed, fixed, gone</option>
         </select>
       }
     >
-      {list.length === 0 ? <Empty>Nothing here — the lamps are lit.</Empty> : (
+      {list.length === 0 ? <Empty>{show === 'later' ? 'Nothing put aside.' : 'Nothing here — the lamps are lit.'}</Empty> : (
         <ul className="divide-y divide-stone-100 dark:divide-stone-800">
           {list.map((f) => (
             <li key={f.id} className="py-2">
@@ -178,18 +208,20 @@ function FindingsCard({ findings, refresh }: { findings: Finding[]; refresh: () 
                   <Badge tone={severityTone(f.severity)}>{f.severity}</Badge>
                   <Badge>{f.check_kind}</Badge>
                   <span className="text-sm font-medium">{f.title}</span>
-                  <Badge tone={stateTone(f.state)}>{f.state}</Badge>
+                  <Badge tone={stateTone(f.state)}>{STATE_LABEL[f.state] ?? f.state}</Badge>
                   {f.sensitive ? <Badge tone="red">sensitive</Badge> : null}
                 </div>
                 <div className="text-xs text-stone-500 mt-0.5"><code>{f.anchor}</code> · {f.category} · {ago(f.updated_at)}</div>
+                {NOT_NOW.includes(f.state) && f.decision && open !== f.id && <div className="text-xs text-stone-500 mt-0.5 line-clamp-1">“{f.decision.rationale}”</div>}
               </button>
               {open === f.id && (
                 <div className="mt-2 rounded-lg bg-stone-50 dark:bg-stone-950 p-3 space-y-2">
                   <pre className="whitespace-pre-wrap text-xs font-sans">{f.body || '(no detail)'}</pre>
-                  {f.dismissal && <p className="text-xs text-violet-700 dark:text-violet-300">Dismissed by {f.dismissal.by}: “{f.dismissal.reason}”</p>}
+                  {f.decision && <DecisionNote d={f.decision} />}
                   <div className="flex gap-2">
-                    {f.state === 'open' && <DismissButton onDismiss={(reason) => dismiss.mutate({ id: f.id, reason })} />}
-                    {(f.state === 'dismissed' || f.state === 'gone') && <Button onClick={() => reopen.mutate(f.id)}>Reopen</Button>}
+                    {['open', 'deferred', 'declined', 'dismissed'].includes(f.state) && <Button variant="primary" onClick={() => take.mutate(f.id)}>Take it</Button>}
+                    {['open', 'admitted', 'deferred', 'declined'].includes(f.state) && <DismissButton onDismiss={(reason) => dismiss.mutate({ id: f.id, reason })} />}
+                    {(f.state === 'dismissed' || f.state === 'gone' || f.state === 'fixed') && <Button onClick={() => reopen.mutate(f.id)}>Reopen</Button>}
                     {f.proposal_id && <Link className="text-sm underline self-center" to={`/proposals/${f.proposal_id}`}>proposal</Link>}
                   </div>
                 </div>
@@ -198,7 +230,7 @@ function FindingsCard({ findings, refresh }: { findings: Finding[]; refresh: () 
           ))}
         </ul>
       )}
-      <ErrorNote error={dismiss.error || reopen.error} />
+      <ErrorNote error={dismiss.error || reopen.error || take.error} />
     </Card>
   )
 }

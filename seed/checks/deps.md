@@ -6,7 +6,7 @@ scopes: [full]
 agent: none
 detectors: [npm-outdated]
 categories: [outdated-major, outdated-minor]
-defaults: { enabled: true, delivery: report, auto_submit: false, armed: false, cadence_days: 7 }
+defaults: { enabled: true, delivery: report, auto_submit: false, armed: false, cadence_days: 7, admission: arbiter, lean: admit }
 ---
 Detector-only: each direct dependency in package.json is compared with the registry's
 `latest`. Patch-level drift is not reported.

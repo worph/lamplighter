@@ -223,7 +223,7 @@ describe('reconcile', () => {
     db.prepare("INSERT OR IGNORE INTO groups (id, name, policy) VALUES ('default','Default','')").run()
     db.prepare("INSERT INTO repos (key, forge_id, group_id, owner, name, remote_url, line, created_at) VALUES ('f~r','f','default','','r','x','main','now')").run()
     const rec = (title: string, anchor = 'README.md') => ({ category: 'stale-readme', anchor, title, body: '', severity: 'minor' as const })
-    const base = { repo: 'f~r', check: 'docs', sensitive: false, worktree: repo }
+    const base = { repo: 'f~r', check: 'docs', revision: 1, cadenceDays: 7, sensitive: false, worktree: repo }
     const r1 = await reconcile(db, { ...base, roundId: 'r1', scope: 'full', commit: c1, recorded: [rec('old command'), rec('other', 'docs/x.md')] })
     expect(r1.created).toBe(2)
     const r2 = await reconcile(db, { ...base, roundId: 'r2', scope: 'full', commit: c1, recorded: [rec('old command, reworded')] })
@@ -266,8 +266,8 @@ describe('admin MCP', () => {
     await expect(reject.run(app, { id: 'p_sent', reason: 'not this one' } as never, 'mcp')).rejects.toThrow(/Activity/)
     expect((db.prepare("SELECT state FROM proposals WHERE id = 'p_sent'").get() as { state: string }).state).toBe('submitted')
     expect(await reject.run(app, { id: 'p_ready', reason: 'a broader fix is coming' } as never, 'mcp')).toEqual({ id: 'p_ready', state: 'rejected' })
-    // Its finding goes back to open, blocked until its input changes.
-    expect(db.prepare("SELECT state, blocked_input FROM findings WHERE id = 'f1'").get()).toEqual({ state: 'open', blocked_input: 'h' })
+    // Its finding stays wanted (admitted), blocked until its input changes.
+    expect(db.prepare("SELECT state, blocked_input FROM findings WHERE id = 'f1'").get()).toEqual({ state: 'admitted', blocked_input: 'h' })
   })
 })
 

@@ -1,7 +1,7 @@
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
-import { markFixed, returnToOpen } from '../findings/index.js'
+import { markFixed, returnToAdmitted } from '../findings/index.js'
 import { forgeRow } from '../forges/index.js'
 import { apiFor } from '../forges/auth.js'
 import { assertCanDeliver, commitIdentity, deliveryBlocker } from '../repos/access.js'
@@ -60,29 +60,30 @@ function markLanded(app: App, p: ProposalRow, resolution: string) {
   resolveFor(app.db, p.id, resolution)
 }
 
-/** The line moved under the proposal: its findings go back to open, without blocking a retry. */
+/** The line moved under the proposal: its findings go back to admitted, without blocking a retry. */
 function markStale(app: App, p: ProposalRow, message: string) {
   setState(app, p.id, 'stale', { error: message })
-  releaseFindings(app, p, 'open', false)
+  releaseFindings(app, p, 'admitted', false)
   resolveFor(app.db, p.id, 'stale', message)
 }
 
 /**
- * Hand the proposal's findings back. `block` remembers that this input was tried, so the same
- * findings are not proposed again until what they are about changes.
+ * Hand the proposal's findings back. Back to `admitted`, not `open`: the work was wanted, this
+ * attempt was not (§6.2). `block` remembers that this input was tried, so the same findings are
+ * not proposed again until what they are about changes.
  */
-function releaseFindings(app: App, p: ProposalRow, to: 'open' | 'fixed', block: boolean) {
+function releaseFindings(app: App, p: ProposalRow, to: 'admitted' | 'fixed', block: boolean) {
   const t = now()
   for (const id of JSON.parse(p.finding_ids) as string[]) {
     if (to === 'fixed') markFixed(app.db, id, p.id, t)
-    else returnToOpen(app.db, id, { proposalId: p.id, block, t })
+    else returnToAdmitted(app.db, id, { proposalId: p.id, block, t })
   }
 }
 
 export function failProposal(app: App, id: string, reason: string, opts: { block?: boolean } = {}) {
   const p = mustGet(app, id)
   setState(app, id, 'failed', { error: reason })
-  releaseFindings(app, p, 'open', opts.block ?? true)
+  releaseFindings(app, p, 'admitted', opts.block ?? true)
   logEvent(app.db, { level: 'warn', code: 'PROPOSAL_FAILED', repo: p.repo_key, message: `${p.check_kind} proposal failed: ${reason.slice(0, 300)}`, detail: { proposal: id } })
 }
 
@@ -270,7 +271,7 @@ export async function rejectProposal(app: App, id: string, reason: string, by: s
   const item = openItemFor(app.db, id)
   recordOverride(app.db, { activity: item?.id, proposed: { proposal: id, summary: p.summary }, decided: 'rejected', reason })
   setState(app, id, 'rejected', { error: reason || undefined })
-  releaseFindings(app, p, 'open', true)
+  releaseFindings(app, p, 'admitted', true)
   resolveFor(app.db, id, 'rejected', reason)
   logEvent(app.db, { code: 'REJECTED', repo: repo.key, message: `${p.check_kind} proposal rejected by ${by}: ${reason}`, detail: { proposal: id } })
   return mustGet(app, id)
@@ -300,7 +301,7 @@ export async function revertPush(app: App, id: string, by: string): Promise<Prop
   }
   setState(app, id, 'reverted')
   const t = now()
-  for (const fid of JSON.parse(p.finding_ids) as string[]) returnToOpen(app.db, fid, { block: true, t })
+  for (const fid of JSON.parse(p.finding_ids) as string[]) returnToAdmitted(app.db, fid, { block: true, t })
   recordOverride(app.db, { activity: openItemFor(app.db, id)?.id, proposed: { proposal: id }, decided: 'reverted' })
   resolveFor(app.db, id, 'reverted')
   logEvent(app.db, { code: 'REVERTED', repo: repo.key, message: `${p.check_kind} push reverted by ${by}`, detail: { proposal: id } })
@@ -324,7 +325,7 @@ export async function pollPullRequests(app: App): Promise<void> {
         markLanded(app, p, 'merged')
       } else {
         setState(app, p.id, 'rejected', { error: 'PR closed without merge' })
-        releaseFindings(app, p, 'open', true)
+        releaseFindings(app, p, 'admitted', true)
         recordOverride(app.db, { proposed: { proposal: p.id }, decided: 'pr-closed' })
         resolveFor(app.db, p.id, 'closed')
       }

@@ -43,28 +43,52 @@ export function severityTone(s: string) {
 }
 
 export function stateTone(s: string): 'stone' | 'amber' | 'red' | 'green' | 'blue' | 'violet' {
-  if (['open', 'running', 'validating', 'drafting', 'queued'].includes(s)) return 'amber'
+  if (['open', 'admitted', 'running', 'validating', 'drafting', 'queued'].includes(s)) return 'amber'
   if (['failed', 'blocked', 'stale'].includes(s)) return 'red'
   if (['fixed', 'landed', 'done', 'ready', 'merged'].includes(s)) return 'green'
   if (['proposed', 'submitted', 'held'].includes(s)) return 'blue'
-  if (['dismissed', 'rejected', 'reverted'].includes(s)) return 'violet'
+  if (['dismissed', 'declined', 'rejected', 'reverted'].includes(s)) return 'violet'
   return 'stone'
 }
 
 const LAMP: Record<LampState, { cls: string; label: string }> = {
-  lit: { cls: 'bg-emerald-500 shadow-[0_0_8px_2px_rgba(16,185,129,0.55)]', label: 'lit — clean as of the last round' },
-  dim: { cls: 'bg-amber-700/70 dark:bg-amber-800', label: 'dim — open findings' },
+  lit: { cls: 'bg-emerald-500 shadow-[0_0_8px_2px_rgba(16,185,129,0.55)]', label: 'lit — nothing admitted is left' },
+  dim: { cls: 'bg-amber-700/70 dark:bg-amber-800', label: 'dim — work left (admitted, or not judged yet)' },
   out: { cls: 'bg-red-500', label: 'out — last round blocked or failed' },
   unlit: { cls: 'bg-stone-300 dark:bg-stone-700', label: 'unlit — never run' },
   off: { cls: 'border border-dashed border-stone-300 dark:border-stone-700', label: 'off — check disabled' },
 }
 
-export function LampDot({ state, count, title }: { state: LampState; count?: number; title?: string }) {
+/** `later`: what admission put aside (not now, declined), shown so green is never reached quietly. */
+export function LampDot({ state, count, later, title }: { state: LampState; count?: number; later?: number; title?: string }) {
   return (
-    <span title={`${title ? `${title}: ` : ''}${LAMP[state].label}${count ? ` (${count})` : ''}`} className="inline-flex items-center gap-1">
+    <span title={`${title ? `${title}: ` : ''}${LAMP[state].label}${count ? ` (${count})` : ''}${later ? ` · ${later} not now` : ''}`} className="inline-flex items-center gap-1">
       <span className={`inline-block h-3 w-3 rounded-full ${LAMP[state].cls}`} />
       {count ? <span className="text-[11px] text-stone-500 tabular-nums">{count}</span> : null}
+      {later ? <span className="text-[11px] text-stone-400 dark:text-stone-600 tabular-nums">·{later}</span> : null}
     </span>
+  )
+}
+
+type Admission = { admission: 'always' | 'arbiter' | 'manual'; lean: 'admit' | 'defer' }
+
+/** Which findings of a check become work (§6.4): one select over admission and the arbiter's lean. */
+export function AdmissionSelect({ value, onChange }: { value: Admission; onChange: (p: Partial<Admission>) => void }) {
+  return (
+    <select
+      className={`${inputCls} !w-auto !py-1`}
+      title="always: admitted by rule · arbiter: judged with the policy and past decisions · manual: only when you take one"
+      value={value.admission === 'arbiter' ? `arbiter:${value.lean}` : value.admission}
+      onChange={(e) => {
+        const [admission, lean] = e.target.value.split(':') as [Admission['admission'], Admission['lean'] | undefined]
+        onChange(lean ? { admission, lean } : { admission })
+      }}
+    >
+      <option value="always">always</option>
+      <option value="arbiter:admit">arbiter, leans admit</option>
+      <option value="arbiter:defer">arbiter, leans defer</option>
+      <option value="manual">manual</option>
+    </select>
   )
 }
 

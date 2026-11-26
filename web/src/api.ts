@@ -26,7 +26,10 @@ export async function request<T>(url: string, init: RequestInit & { json?: unkno
 export type LampState = 'lit' | 'dim' | 'out' | 'unlit' | 'off'
 export interface Lamp {
   lamp: LampState
+  /** Work left: raised and not judged yet, admitted, or in a proposal. */
   open: number
+  /** Put aside by admission (deferred or declined): does not dim the lamp. */
+  later: number
   last?: string
   status?: string
 }
@@ -68,6 +71,22 @@ export interface CheckSettings {
   auto_submit: boolean
   armed: boolean
   cadence_days: number
+  admission: 'always' | 'arbiter' | 'manual'
+  lean: 'admit' | 'defer'
+}
+
+export type FindingState = 'open' | 'admitted' | 'deferred' | 'declined' | 'dismissed' | 'proposed' | 'fixed' | 'gone'
+
+export interface Decision {
+  id: string
+  decision: 'admit' | 'defer' | 'decline' | 'dismiss' | 'take' | 'reopen'
+  by: 'rule' | 'arbiter' | 'user' | 'mcp'
+  actor: string
+  rationale: string
+  /** JSON array of the decision ids it relied on. */
+  precedents: string
+  session_id: string | null
+  at: string
 }
 
 export interface Finding {
@@ -80,17 +99,19 @@ export interface Finding {
   body: string
   severity: 'critical' | 'major' | 'minor'
   sensitive: number
-  state: 'open' | 'dismissed' | 'proposed' | 'fixed' | 'gone'
+  state: FindingState
   proposal_id: string | null
+  source: string
   updated_at: string
-  dismissal?: { reason: string; by: string; at: string }
+  /** The latest decision on it, if any. */
+  decision?: Decision
 }
 
 export interface RoundRow {
   id: string
   repo_key?: string
   check_kind: string
-  kind: 'round' | 'author' | 'confirm'
+  kind: 'round' | 'author' | 'confirm' | 'arbitrate'
   scope: 'diff' | 'full'
   status: string
   summary: string | null
@@ -271,7 +292,7 @@ export interface ChatMessage {
 }
 
 export const api = {
-  overview: () => request<{ repos: number; open_findings: number; inbox: number; schedule: Schedule; inference: { driver: string; url: string }; check_errors: string[] }>('/api/v1/overview'),
+  overview: () => request<{ repos: number; open_findings: number; not_now: number; inbox: number; schedule: Schedule; inference: { driver: string; url: string }; check_errors: string[] }>('/api/v1/overview'),
   repos: () => request<RepoSummary[]>('/api/v1/repos'),
   repo: (key: string) => request<RepoDetail>(`/api/v1/repos/${encodeURIComponent(key)}`),
   addRepo: (b: Record<string, unknown>) => request<RepoSummary>('/api/v1/repos', { method: 'POST', json: b }),
@@ -283,6 +304,7 @@ export const api = {
   setRepoCheck: (key: string, check: string, s: Partial<CheckSettings> | null) => request(`/api/v1/repos/${encodeURIComponent(key)}/checks/${check}`, { method: 'PUT', json: s }),
   dismiss: (id: string, reason: string) => request(`/api/v1/findings/${id}/dismiss`, { method: 'POST', json: { reason } }),
   reopen: (id: string) => request(`/api/v1/findings/${id}/reopen`, { method: 'POST' }),
+  take: (id: string, reason = '') => request(`/api/v1/findings/${id}/take`, { method: 'POST', json: { reason } }),
   round: (id: string) => request<RoundRow>(`/api/v1/rounds/${id}`),
   proposal: (id: string) => request<ProposalRow>(`/api/v1/proposals/${id}`),
   approve: (id: string) => request(`/api/v1/proposals/${id}/approve`, { method: 'POST' }),

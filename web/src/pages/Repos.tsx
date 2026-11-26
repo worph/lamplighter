@@ -51,7 +51,7 @@ export default function Repos() {
                     </td>
                     <td className="px-2 py-2 text-xs"><code>{r.line}</code> <span className="text-stone-400 font-mono">{r.last_head?.slice(0, 7)}</span></td>
                     {kinds.map((k) => (
-                      <td key={k} className="px-1.5 py-2 text-center"><LampDot state={r.lamps[k]?.lamp ?? 'unlit'} count={r.lamps[k]?.open} title={k} /></td>
+                      <td key={k} className="px-1.5 py-2 text-center"><LampDot state={r.lamps[k]?.lamp ?? 'unlit'} count={r.lamps[k]?.open} later={r.lamps[k]?.later} title={k} /></td>
                     ))}
                     <td className="px-4 py-2 text-xs text-stone-500">{r.fetch_error ? <span className="text-red-600" title={r.fetch_error}>fetch failed</span> : ago(r.last_fetch_at)}</td>
                   </tr>
@@ -62,8 +62,9 @@ export default function Repos() {
         )}
       </Card>
       <p className="text-xs text-stone-500 flex flex-wrap gap-4">
-        <span><LampDot state="lit" /> lit: clean</span>
-        <span><LampDot state="dim" /> dim: open findings</span>
+        <span><LampDot state="lit" /> lit: nothing admitted is left</span>
+        <span><LampDot state="dim" /> dim: work left (admitted, or not judged yet)</span>
+        <span><span className="text-[11px] text-stone-400 tabular-nums">·3</span> not now: put aside by admission</span>
         <span><LampDot state="out" /> out: last round blocked/failed</span>
         <span><LampDot state="unlit" /> never run</span>
         <span><LampDot state="off" /> disabled</span>

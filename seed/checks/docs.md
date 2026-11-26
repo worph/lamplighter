@@ -5,7 +5,7 @@ revision: 1
 scopes: [diff, full]
 agent: review
 categories: [stale-readme, stale-reference, missing-doc, wrong-command, broken-link]
-defaults: { enabled: true, delivery: push, auto_submit: true, armed: true, cadence_days: 7 }
+defaults: { enabled: true, delivery: push, auto_submit: true, armed: true, cadence_days: 7, admission: arbiter, lean: admit }
 ---
 Check that the repository's documentation (README.md, CLAUDE.md, docs/**, inline usage text)
 says what the code actually does.

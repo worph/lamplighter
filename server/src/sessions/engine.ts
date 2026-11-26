@@ -2,7 +2,8 @@ import type { CheckDef } from '../checks/index.js'
 import type { App } from '../context.js'
 import { newId, now } from '../db/index.js'
 import { logEvent } from '../events.js'
-import { lastDismissal, markProposed, reconcile, type FindingRow } from '../findings/index.js'
+import { lastDecision, markProposed, reconcile, type FindingRow } from '../findings/index.js'
+import { applyRules, enqueueArbitration, pendingCount } from '../admission/index.js'
 import { forgeRow } from '../forges/index.js'
 import { commitIdentity, writeAccess } from '../repos/access.js'
 import { git } from '../forges/gitcli.js'
@@ -22,7 +23,7 @@ import { afterReady, failProposal, getProposal, type ProposalRow } from '../deli
 
 export interface QueueRow {
   id: string
-  job: 'round' | 'author'
+  job: 'round' | 'author' | 'arbitrate'
   repo_key: string
   check_kind: string
   scope: 'diff' | 'full'
@@ -42,7 +43,10 @@ function checkOf(app: App, kind: string): CheckDef {
   return def
 }
 
-function insertRound(app: App, r: { id: string; repo: string; def: CheckDef; kind: 'round' | 'author' | 'confirm'; scope: 'diff' | 'full'; base?: string | null; head: string; proposal?: string; trigger: string }) {
+export function insertRound(
+  app: App,
+  r: { id: string; repo: string; def: { kind: string; revision: number }; kind: 'round' | 'author' | 'confirm' | 'arbitrate'; scope: 'diff' | 'full'; base?: string | null; head: string; proposal?: string; trigger: string },
+) {
   app.db
     .prepare(
       `INSERT INTO rounds (id, repo_key, check_kind, check_revision, kind, scope, base_sha, head_sha, proposal_id, trigger, status, started_at)
@@ -51,14 +55,14 @@ function insertRound(app: App, r: { id: string; repo: string; def: CheckDef; kin
     .run(r.id, r.repo, r.def.kind, r.def.revision, r.kind, r.scope, r.base ?? null, r.head, r.proposal ?? null, r.trigger, now())
 }
 
-function endRound(app: App, id: string, f: { status: 'done' | 'blocked' | 'failed'; summary?: string; report?: string; error?: string; usage?: unknown }) {
+export function endRound(app: App, id: string, f: { status: 'done' | 'blocked' | 'failed'; summary?: string; report?: string; error?: string; usage?: unknown }) {
   app.db
     .prepare('UPDATE rounds SET status = ?, summary = ?, report = ?, error = ?, usage_json = ?, ended_at = ? WHERE id = ?')
     .run(f.status, f.summary ?? null, f.report ?? null, f.error ?? null, f.usage ? JSON.stringify(f.usage) : null, now(), id)
 }
 
 /** Run one session through whichever driver is configured, and account for it. */
-async function drive(app: App, s: Session, prompt: string, roundId: string) {
+export async function drive(app: App, s: Session, prompt: string, roundId: string) {
   const driver = driverFor(app.config.current, app.db)
   const cfg = app.config.current
   const result = await driver.runSession({
@@ -82,11 +86,11 @@ async function drive(app: App, s: Session, prompt: string, roundId: string) {
 }
 
 /** Infra, not the repository (invariant 6): the round is blocked, nothing about the findings is concluded. */
-function isInfra(err: unknown): err is InferenceError | SandboxError {
+export function isInfra(err: unknown): err is InferenceError | SandboxError {
   return err instanceof InferenceError || err instanceof SandboxError
 }
 
-function infraAlert(app: App, err: unknown) {
+export function infraAlert(app: App, err: unknown) {
   if (err instanceof InferenceError && (err.kind === 'auth' || err.kind === 'missing')) {
     openAlert(app.db, `inference.${err.kind}`, `Inference backend ${err.kind === 'auth' ? 'refused credentials' : 'unreachable'}`, err.message)
   }
@@ -140,9 +144,10 @@ async function inRound<T>(
 
 function existingFindings(app: App, repo: string, check: string) {
   const rows = app.db
-    .prepare("SELECT * FROM findings WHERE repo_key = ? AND check_kind = ? AND state IN ('open','dismissed','proposed') ORDER BY updated_at DESC LIMIT 80")
+    .prepare("SELECT * FROM findings WHERE repo_key = ? AND check_kind = ? AND state IN ('open','admitted','deferred','declined','dismissed','proposed') ORDER BY updated_at DESC LIMIT 80")
     .all(repo, check) as FindingRow[]
-  return rows.map((finding) => ({ finding, dismissedReason: finding.state === 'dismissed' ? lastDismissal(app.db, finding.id)?.reason : undefined }))
+  const putAside = ['dismissed', 'deferred', 'declined']
+  return rows.map((finding) => ({ finding, reason: putAside.includes(finding.state) ? lastDecision(app.db, finding.id)?.rationale : undefined }))
 }
 
 function renderFindings(rows: FindingRow[]): string {
@@ -188,17 +193,20 @@ export async function runRound(app: App, job: QueueRow): Promise<string> {
       if (session.done?.status === 'cannot') narrative = `**The model could not complete the review:** ${session.done.text}`
     }
     const rec = await reconcile(app.db, {
-      repo: repo.key, check: def.kind, roundId: id, scope, sensitive: def.sensitive === 'always', worktree, commit: head, recorded,
+      repo: repo.key, check: def.kind, revision: def.revision, cadenceDays: settingsFor(app, repo, def).cadence_days, roundId: id, scope,
+      sensitive: def.sensitive === 'always', worktree, commit: head, recorded,
     })
+    applyRules(app, repo, rec.ids)
     const touched = rec.ids.length
       ? (app.db.prepare(`SELECT * FROM findings WHERE id IN (${rec.ids.map(() => '?').join(',')})`).all(...rec.ids) as FindingRow[])
       : []
-    const summary = `${recorded.length} raised · ${rec.created} new · ${rec.reopened} reopened · ${rec.stillDismissed} still dismissed · ${rec.gone} gone`
+    const summary = `${recorded.length} raised · ${rec.created} new · ${rec.reopened} reopened · ${rec.stillDismissed} still dismissed · ${rec.held} still not now · ${rec.gone} gone`
     const report = `# ${def.title} — ${scope} round\n\n${repo.key} @ \`${head.slice(0, 10)}\`${scope === 'diff' ? ` (since \`${job.base_sha!.slice(0, 10)}\`)` : ''}\n\n${narrative}\n\n## Findings this round\n\n${renderFindings(touched)}\n\n_${summary}_`
     endRound(app, id, { status: 'done', summary, report, usage })
     logEvent(app.db, { code: 'ROUND_DONE', repo: repo.key, message: `${def.kind} ${scope} round: ${summary}`, detail: { round: id } })
     maybeReport(app, repo, def, { id, scope, summary, fresh: rec.created + rec.reopened })
     maybePropose(app, repo, def)
+    if (pendingCount(app, repo.key)) enqueueArbitration(app, repo.key, 'round')
     return id
   })
 }
@@ -226,7 +234,7 @@ function maybeReport(app: App, repo: RepoRow, def: CheckDef, r: { id: string; sc
 function proposalCandidates(app: App, repo: string, check: string): FindingRow[] {
   return app.db
     .prepare(
-      `SELECT * FROM findings WHERE repo_key = ? AND check_kind = ? AND state = 'open' AND proposal_id IS NULL
+      `SELECT * FROM findings WHERE repo_key = ? AND check_kind = ? AND state = 'admitted' AND proposal_id IS NULL
          AND (blocked_input IS NULL OR blocked_input != input_hash)
        ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'major' THEN 1 ELSE 2 END, created_at LIMIT 8`,
     )

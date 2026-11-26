@@ -5,7 +5,7 @@ revision: 2
 scopes: [full]
 agent: review
 categories: [boundary-violation, dependency-direction, drift-from-docs, missing-seam, scaling-risk]
-defaults: { enabled: true, delivery: report, auto_submit: false, armed: false, cadence_days: 30 }
+defaults: { enabled: true, delivery: report, auto_submit: false, armed: false, cadence_days: 30, admission: manual, lean: defer }
 ---
 Review the repository's architecture as a senior engineer joining the project would: what the
 modules are, which way dependencies point, where the boundaries leak, where the design described

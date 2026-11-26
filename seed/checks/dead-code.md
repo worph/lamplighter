@@ -5,7 +5,7 @@ revision: 1
 scopes: [full]
 agent: review
 categories: [unused-export, unused-file, unused-function, unused-dependency, unreachable-code]
-defaults: { enabled: true, delivery: pr, auto_submit: false, armed: true, cadence_days: 14 }
+defaults: { enabled: true, delivery: pr, auto_submit: false, armed: true, cadence_days: 14, admission: arbiter, lean: admit }
 ---
 Find code that nothing uses: exported symbols never imported, files never imported or
 referenced, functions never called, dependencies in the manifest never imported, branches that

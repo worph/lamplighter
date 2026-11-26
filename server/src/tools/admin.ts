@@ -4,9 +4,10 @@ import { CHECK_KINDS } from '../checks/index.js'
 import { checkSettingsSchema } from '../config/index.js'
 import type { App } from '../context.js'
 import { listEvents, logEvent } from '../events.js'
-import { dismiss, getFinding, lastDismissal, listFindings, reopen } from '../findings/index.js'
+import { decisionsOf, FINDING_STATES, getFinding, lastDecision, listFindings } from '../findings/index.js'
+import { personDecides, policyChanged, watchAdmission } from '../admission/index.js'
 import { listItems } from '../activity/index.js'
-import { addRepo, getRepo, listRepos, parseSettings, setCheckSettings, setPolicy } from '../repos/registry.js'
+import { addRepo, getGroup, getRepo, listRepos, parseSettings, setCheckSettings, setPolicy } from '../repos/registry.js'
 import { enqueueRound } from '../scheduler/index.js'
 import { maybePropose } from '../sessions/engine.js'
 import { writeAccess } from '../repos/access.js'
@@ -15,8 +16,9 @@ import { deliver, getProposal, mergeBranch, rejectProposal, revertPush } from '.
 /**
  * One registry behind the admin MCP and the chat (Newsdesk/Aube's shape). Tools marked `chat`
  * exist only in the chat and only run after a typed confirmation: the MCP can read, configure,
- * request, dismiss and reject what has not left Lamplighter, but it cannot approve, merge, push
- * or revert anything, nor touch a forge (invariant 9).
+ * request, dismiss, take and reject what has not left Lamplighter, but it cannot approve, merge, push
+ * or revert anything, nor touch a forge (invariant 9). A finding the MCP takes is recorded as the
+ * MCP's decision, not a person's, so it never becomes a precedent.
  */
 
 export interface AdminTool<S extends z.ZodObject<z.ZodRawShape> = z.ZodObject<z.ZodRawShape>> {
@@ -44,7 +46,7 @@ export const ADMIN_TOOLS: AdminTool[] = [
     schema: z.object({}),
     async run(app) {
       const counts = app.db
-        .prepare("SELECT repo_key, check_kind, COUNT(*) AS n FROM findings WHERE state IN ('open','proposed') GROUP BY repo_key, check_kind")
+        .prepare("SELECT repo_key, check_kind, COUNT(*) AS n FROM findings WHERE state IN ('open','admitted','proposed') GROUP BY repo_key, check_kind")
         .all() as { repo_key: string; check_kind: string; n: number }[]
       return listRepos(app.db).map((r) => ({
         key: r.key, line: r.line, visibility: r.visibility, group: r.group_id, head: r.last_head?.slice(0, 10) ?? null, fetch_error: r.fetch_error,
@@ -68,8 +70,9 @@ export const ADMIN_TOOLS: AdminTool[] = [
   }),
   tool({
     name: 'list_findings', title: 'List findings', scope: 'both', readOnly: true,
-    description: 'Findings, filtered by repo, check and state (open, proposed, dismissed, fixed, gone).',
-    schema: z.object({ repo: z.string().optional(), check: kind.optional(), state: z.enum(['open', 'proposed', 'dismissed', 'fixed', 'gone']).optional(), limit: z.number().int().min(1).max(500).optional() }),
+    description:
+      'Findings, filtered by repo, check and state: open (raised, not judged yet), admitted (work), deferred (not now), declined, dismissed, proposed, fixed, gone.',
+    schema: z.object({ repo: z.string().optional(), check: kind.optional(), state: z.enum(FINDING_STATES as [string, ...string[]]).optional(), limit: z.number().int().min(1).max(500).optional() }),
     async run(app, f) {
       return listFindings(app.db, { ...f, limit: f.limit ?? 100 }).map((x) => ({
         id: x.id, repo: x.repo_key, check: x.check_kind, state: x.state, severity: x.severity, category: x.category, anchor: x.anchor, title: x.title, sensitive: !!x.sensitive,
@@ -78,12 +81,33 @@ export const ADMIN_TOOLS: AdminTool[] = [
   }),
   tool({
     name: 'get_finding', title: 'Finding detail', scope: 'both', readOnly: true,
-    description: 'One finding with its full body and, if dismissed, the reason.',
+    description: 'One finding with its full body and every decision taken on it (admission, dismissals, takes), newest first.',
     schema: z.object({ id: z.string() }),
     async run(app, { id }) {
       const f = getFinding(app.db, id)
       if (!f) throw new Error(`no finding ${id}`)
-      return { ...f, dismissal: lastDismissal(app.db, id) ?? null }
+      return { ...f, decisions: decisionsOf(app.db, id) }
+    },
+  }),
+  tool({
+    name: 'list_not_now', title: 'Not now', scope: 'both', readOnly: true,
+    description: 'Findings admission put aside (deferred or declined), with the rationale and who decided, for one repo or the fleet.',
+    schema: z.object({ repo: z.string().optional(), limit: z.number().int().min(1).max(500).optional() }),
+    async run(app, { repo, limit }) {
+      const rows = [...listFindings(app.db, { repo, state: 'deferred', limit: limit ?? 100 }), ...listFindings(app.db, { repo, state: 'declined', limit: limit ?? 100 })]
+      return rows.map((x) => {
+        const d = lastDecision(app.db, x.id)
+        return { id: x.id, repo: x.repo_key, check: x.check_kind, state: x.state, severity: x.severity, title: x.title, by: d?.by, rationale: d?.rationale, at: d?.at }
+      })
+    },
+  }),
+  tool({
+    name: 'take_finding', title: 'Take a finding', scope: 'both',
+    description: 'Make a deferred, declined, dismissed or not yet judged finding work: it becomes admitted, and is fixed when its check is armed.',
+    schema: z.object({ id: z.string(), reason: z.string().max(800).optional() }),
+    async run(app, { id, reason }, caller) {
+      const f = personDecides(app, id, 'take', reason ?? '', caller)
+      return { id: f.id, state: f.state }
     },
   }),
   tool({
@@ -159,17 +183,16 @@ export const ADMIN_TOOLS: AdminTool[] = [
     description: 'Mark a finding as won’t-fix, with a reason. It stays dismissed until the code it is about changes.',
     schema: z.object({ id: z.string(), reason: z.string().min(3) }),
     async run(app, { id, reason }, caller) {
-      const f = dismiss(app.db, id, reason, caller)
-      logEvent(app.db, { code: 'DISMISSED', repo: f.repo_key, message: `${f.title} — dismissed by ${caller}: ${reason}` })
+      const f = personDecides(app, id, 'dismiss', reason, caller)
       return { id: f.id, state: f.state }
     },
   }),
   tool({
     name: 'reopen_finding', title: 'Reopen a finding', scope: 'both',
-    description: 'Put a dismissed (or gone) finding back to open.',
+    description: 'Put a finding (dismissed, not now, declined, gone, fixed or admitted) back to be judged again.',
     schema: z.object({ id: z.string() }),
-    async run(app, { id }) {
-      const f = reopen(app.db, id)
+    async run(app, { id }, caller) {
+      const f = personDecides(app, id, 'reopen', '', caller)
       return { id: f.id, state: f.state }
     },
   }),
@@ -178,22 +201,28 @@ export const ADMIN_TOOLS: AdminTool[] = [
     description: 'Replace the prose policy of a group or a repository. Every check’s prompt carries it.',
     schema: z.object({ target: z.enum(['group', 'repo']), id: z.string(), policy: z.string().max(20000) }),
     async run(app, { target, id, policy }, caller) {
+      const changed = (target === 'group' ? getGroup(app.db, id) : getRepo(app.db, id)).policy !== policy
       setPolicy(app.db, target, id, policy, caller)
+      if (changed) policyChanged(app, target === 'group' ? { group: id } : { repo: id })
       return { ok: true }
     },
   }),
   tool({
     name: 'set_check_settings', title: 'Set check settings', scope: 'both',
-    description: 'Change a check’s switches (enabled, delivery report|branch|pr|push, auto_submit, armed, cadence_days) globally, for a group, or for one repo.',
+    description:
+      'Change a check’s switches (enabled, delivery report|branch|pr|push, auto_submit, armed, cadence_days, admission always|arbiter|manual, lean admit|defer) globally, for a group, or for one repo.',
     schema: z.object({ level: z.enum(['global', 'group', 'repo']), id: z.string().optional(), check: kind, settings: checkSettingsSchema }),
     async run(app, { level, id, check, settings }, caller) {
-      if (level === 'global') {
-        app.config.update(['checks', check], settings)
-        logEvent(app.db, { code: 'SETTINGS_SET', repo: null, message: `${check} settings (${level}${id ? ` ${id}` : ''}) changed by ${caller}: ${JSON.stringify(settings)}` })
-      } else {
-        if (!id) throw new Error('id is required for group or repo')
-        setCheckSettings(app.db, level, id, check, settings, { replace: false, by: caller })
-      }
+      const scope = listRepos(app.db).filter((r) => level === 'global' || (level === 'group' ? r.group_id === id : r.key === id))
+      watchAdmission(app, check, scope, () => {
+        if (level === 'global') {
+          app.config.update(['checks', check], settings)
+          logEvent(app.db, { code: 'SETTINGS_SET', repo: null, message: `${check} settings (${level}${id ? ` ${id}` : ''}) changed by ${caller}: ${JSON.stringify(settings)}` })
+        } else {
+          if (!id) throw new Error('id is required for group or repo')
+          setCheckSettings(app.db, level, id, check, settings, { replace: false, by: caller })
+        }
+      })
       return { ok: true }
     },
   }),
@@ -224,7 +253,7 @@ export const ADMIN_TOOLS: AdminTool[] = [
   tool({
     name: 'reject_proposal', title: 'Reject a proposal', scope: 'both',
     description:
-      'Refuse a proposal with a reason. Its findings go back to open and are not proposed again until the code they are about changes. ' +
+      'Refuse a proposal with a reason. Its findings stay admitted and are not proposed again until the code they are about changes. ' +
       'Over MCP only a proposal that has not left Lamplighter (ready or held); a delivered one (an open PR or branch) is rejected in Activity, since that deletes its branch on the forge. ' +
       'In the chat it needs typed confirmation.',
     schema: z.object({ id: z.string(), reason: z.string().min(3) }),

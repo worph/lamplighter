@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { CheckDef } from '../checks/index.js'
 import type { DetectorResult } from '../checks/detectors/index.js'
 import type { FindingRow } from '../findings/index.js'
+import type { Precedent } from '../admission/index.js'
 import type { RepoRow } from '../repos/registry.js'
 
 /**
@@ -68,8 +69,10 @@ function policyBlock(groupPolicy: string, repoPolicy: string): string {
   return p.length ? `## Policy (the operator's rules — they win over general best practice)\n\n${p.join('\n\n')}` : ''
 }
 
-function findingLine(f: FindingRow, dismissedReason?: string): string {
-  const extra = f.state === 'dismissed' ? ` — DISMISSED by the operator: "${dismissedReason ?? ''}"` : ''
+const PUT_ASIDE: Record<string, string> = { dismissed: 'DISMISSED', deferred: 'NOT NOW', declined: 'DECLINED' }
+
+function findingLine(f: FindingRow, reason?: string): string {
+  const extra = PUT_ASIDE[f.state] ? ` — ${PUT_ASIDE[f.state]}: "${reason ?? ''}"` : ''
   return `- [${f.id}] (${f.state}, ${f.severity}) ${f.category} @ ${f.anchor}: ${f.title}${extra}`
 }
 
@@ -83,7 +86,7 @@ export interface RoundPromptArgs {
   base?: string
   head: string
   groupPolicy: string
-  existing: { finding: FindingRow; dismissedReason?: string }[]
+  existing: { finding: FindingRow; reason?: string }[]
 }
 
 export function roundPrompt(a: RoundPromptArgs): string {
@@ -96,9 +99,9 @@ export function roundPrompt(a: RoundPromptArgs): string {
         '## Findings already known for this check',
         '',
         'When you find one of these again, record it with its id as `existing_id` (even if your wording differs).',
-        'Do not re-record a DISMISSED finding unless what it is about has materially changed; if you do, pass its id.',
+        'A DISMISSED, NOT NOW or DECLINED finding was put aside on purpose: record it again only with its id, never as a new one.',
         '',
-        ...a.existing.map((e) => findingLine(e.finding, e.dismissedReason)),
+        ...a.existing.map((e) => findingLine(e.finding, e.reason)),
       ].join('\n')
     : ''
   return [
@@ -198,4 +201,69 @@ export function confirmPrompt(a: ConfirmPromptArgs): string {
     `3. For any NEW problem the change introduces that this check is about (it broke something, removed something still used, documented something false), record_finding without an id. category must be one of: ${a.check.categories.join(', ')}.`,
     '4. Record nothing when the change is correct. Then call finish with a short verdict.',
   ].join('\n')
+}
+
+export interface ArbiterCandidate {
+  finding: FindingRow
+  lean: 'admit' | 'defer'
+}
+
+export interface ArbiterPromptArgs {
+  repo: RepoRow
+  worktree: string
+  groupPolicy: string
+  candidates: ArbiterCandidate[]
+  precedents: Precedent[]
+  /** Per check: findings already admitted and not landed. */
+  backlog: Record<string, number>
+  inFlight: number
+  openItems: number
+  openItemsCap: number
+}
+
+export function arbiterPrompt(a: ArbiterPromptArgs): string {
+  const backlog = Object.entries(a.backlog).filter(([, n]) => n > 0)
+  return [
+    `You are Lamplighter's arbiter for ${a.repo.owner ? `${a.repo.owner}/` : ''}${a.repo.name} (branch ${a.repo.line}).`,
+    "Reviews of separate checks raised the findings below, each without seeing the others. You decide which of them become work: a fix Lamplighter will write, validate and deliver for a person to review. You see the whole repository, its policy and what was decided before. You change nothing and record no findings.",
+    '',
+    policyBlock(a.groupPolicy, a.repo.policy),
+    repoContext(a.worktree),
+    '',
+    '## The backlog',
+    '',
+    backlog.length ? backlog.map(([k, n]) => `- ${k}: ${n} admitted, not landed yet`).join('\n') : '- nothing admitted is waiting',
+    `- proposals in flight: ${a.inFlight}`,
+    `- items awaiting a person: ${a.openItems} (Lamplighter starts no new proposal for this repo past ${a.openItemsCap})`,
+    '',
+    '## Precedents',
+    '',
+    a.precedents.length
+      ? [
+          'Past decisions on similar findings, closest first. A person\'s decision (by: user) outweighs the arbiter\'s own (by: arbiter). Cite the ids you rely on.',
+          '',
+          ...a.precedents.map((p) => `- [${p.id}] by ${p.by}, ${p.at.slice(0, 10)}: ${p.decision.toUpperCase()} "${p.title}" (${p.check_kind}/${p.category}${p.repo_key === a.repo.key ? '' : `, ${p.repo_key}`}) — ${p.rationale}`),
+        ].join('\n')
+      : '_None yet: judge from the policy and the code._',
+    '',
+    '## Candidates',
+    '',
+    ...a.candidates.map(({ finding: f, lean }) =>
+      `### [${f.id}] ${f.title}\n${f.check_kind} · ${f.category} @ ${f.anchor} · ${f.severity}${f.sensitive ? ' · SENSITIVE' : ''} · this check leans ${lean.toUpperCase()}\n\n${f.body.slice(0, 1500)}`),
+    '',
+    '## How to decide',
+    '',
+    '- admit: worth a change now, and the backlog can take it.',
+    '- defer (not now): plausible, but too large, premature, overlapping other admitted work, or past what the backlog can take. It stays visible, and is judged again when the code, the policy or a person\'s decision changes.',
+    '- decline: wrong, a matter of taste the policy does not ask for, or against the policy. A sensitive finding is never declined: defer it.',
+    "- Start from the check's lean and the precedents; depart from them only for a reason you can state.",
+    '- Read the code (list_files, read_file, grep, git_log) when you need to judge how large a change would be.',
+    '',
+    '## How to work',
+    '',
+    '1. Call decide once for every candidate: finding_id, decision, a rationale of one or two sentences, and the precedent ids you relied on.',
+    '2. Then call finish with a short summary of what you admitted and what you put aside, and why.',
+  ]
+    .filter((s) => s !== '')
+    .join('\n')
 }

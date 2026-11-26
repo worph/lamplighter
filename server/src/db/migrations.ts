@@ -216,4 +216,73 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (repo_key, sha, command, image)
   );
   `,
+  // Admission (§6.4): a finding is raised by a source, then judged (admitted, deferred, declined)
+  // before it can become work. Every judgement is a decision row; dismissals are one kind of it.
+  // Rounds and the queue gain the arbiter's job, which SQLite only allows by rebuilding the table.
+  `
+  ALTER TABLE findings ADD COLUMN source TEXT NOT NULL DEFAULT 'round';
+  ALTER TABLE findings ADD COLUMN source_ref TEXT;
+
+  CREATE TABLE decisions (
+    id TEXT PRIMARY KEY,
+    finding_id TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    decision TEXT NOT NULL CHECK (decision IN ('admit','defer','decline','dismiss','take','reopen')),
+    by TEXT NOT NULL CHECK (by IN ('rule','arbiter','user','mcp')),
+    actor TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    precedents TEXT NOT NULL DEFAULT '[]',
+    input_hash TEXT NOT NULL,
+    check_revision INTEGER NOT NULL,
+    session_id TEXT,
+    at TEXT NOT NULL
+  );
+  CREATE INDEX decisions_finding ON decisions(finding_id, at);
+
+  INSERT INTO decisions (id, finding_id, decision, by, actor, rationale, input_hash, check_revision, at)
+    SELECT 'd_m' || rowid, finding_id, 'dismiss', 'user', by, reason, input_hash, 0, at FROM dismissals;
+  DROP TABLE dismissals;
+
+  CREATE TABLE rounds_new (
+    id TEXT PRIMARY KEY,
+    repo_key TEXT NOT NULL REFERENCES repos(key) ON DELETE CASCADE,
+    check_kind TEXT NOT NULL,
+    check_revision INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('round','author','confirm','arbitrate')),
+    scope TEXT NOT NULL CHECK (scope IN ('diff','full')),
+    base_sha TEXT,
+    head_sha TEXT NOT NULL,
+    proposal_id TEXT,
+    trigger TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT,
+    report TEXT,
+    error TEXT,
+    usage_json TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT
+  );
+  INSERT INTO rounds_new SELECT * FROM rounds;
+  DROP TABLE rounds;
+  ALTER TABLE rounds_new RENAME TO rounds;
+  CREATE INDEX rounds_repo ON rounds(repo_key, check_kind, started_at);
+
+  CREATE TABLE queue_new (
+    id TEXT PRIMARY KEY,
+    job TEXT NOT NULL CHECK (job IN ('round','author','arbitrate')),
+    repo_key TEXT NOT NULL REFERENCES repos(key) ON DELETE CASCADE,
+    check_kind TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    base_sha TEXT,
+    head_sha TEXT,
+    foreground INTEGER NOT NULL DEFAULT 0,
+    tier INTEGER NOT NULL DEFAULT 5,
+    trigger TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    created_at TEXT NOT NULL,
+    started_at TEXT
+  );
+  INSERT INTO queue_new SELECT * FROM queue;
+  DROP TABLE queue;
+  ALTER TABLE queue_new RENAME TO queue;
+  `,
 ]

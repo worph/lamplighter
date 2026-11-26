@@ -15,7 +15,7 @@ fix_tools:
   - image: ghcr.io/google/osv-scanner:v2.7.1@sha256:a70ffffc2bfd33482953e5d6b64c6fcdb30239717a07b0f0d3ab2859ce3e4cde
     path: /osv-scanner
 categories: [vulnerable-dependency]
-defaults: { enabled: true, delivery: report, auto_submit: false, armed: false, cadence_days: 1 }
+defaults: { enabled: true, delivery: report, auto_submit: false, armed: false, cadence_days: 1, admission: always, lean: admit }
 ---
 Detector-only: osv-scanner reads every lockfile and manifest it knows (npm, pnpm, yarn, PyPI,
 Go, Cargo, Maven…) and checks each package version against OSV. A finding per vulnerable

@@ -4,12 +4,27 @@ import type { RecordedFinding } from '../findings/index.js'
 import type { RepoRow } from '../repos/registry.js'
 import type { Workspace } from './workspace.js'
 
-export type SessionKind = 'round' | 'author' | 'confirm'
+export type SessionKind = 'round' | 'author' | 'confirm' | 'arbiter'
 
 /** A token outlives its session's clock by this much, so a late `finish` still lands. */
 export const SESSION_SLACK_S = 600
 
 export type { RecordedFinding }
+
+/** One judgement an arbiter session made (§6.4); the backend applies it after the session. */
+export interface ArbiterDecision {
+  finding_id: string
+  decision: 'admit' | 'defer' | 'decline'
+  rationale: string
+  precedents: string[]
+}
+
+/** What an arbiter session may judge, and the precedents it was shown and may cite. */
+export interface ArbiterBrief {
+  candidates: Map<string, { sensitive: boolean }>
+  precedents: Set<string>
+  decisions: ArbiterDecision[]
+}
 
 /**
  * One model session against one worktree. Lives in memory only: the token is minted here, handed
@@ -22,7 +37,10 @@ export interface Session {
   token: string
   kind: SessionKind
   repo: RepoRow
-  check: CheckDef
+  /** The check under review or being fixed; an arbiter session judges every check at once and has none. */
+  check?: CheckDef
+  /** Arbiter sessions only. */
+  arbiter?: ArbiterBrief
   /** The host worktree: commits, fingerprints and repo context are read from it, never by running its code. */
   worktree: string
   /** Where the tools act: the worktree itself, or the session's sandbox. */

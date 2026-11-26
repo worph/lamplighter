@@ -131,13 +131,36 @@ export const WORKSPACE_TOOLS = [
       existing_id: z.string().optional(),
     }),
     async run(s, f) {
-      if (s.kind === 'author') throw new ToolInputError('a fixing session records no findings — fix them, then finish')
+      if (!s.check || s.kind === 'author') throw new ToolInputError('this session records no findings')
       if (!s.check.categories.includes(f.category)) {
         throw new ToolInputError(`category must be one of: ${s.check.categories.join(', ')}`)
       }
       if (s.findings.length >= 50) throw new ToolInputError('50 findings is the limit for one session — keep the most important')
       s.findings.push(f)
       return `recorded (${s.findings.length} so far)`
+    },
+  }),
+  def({
+    name: 'decide',
+    description:
+      'Judge one candidate finding: admit (it becomes work), defer (not now: kept, visible, judged again when something changes) or decline (not worth doing here). rationale: one or two sentences a maintainer would accept. precedents: the ids of the past decisions you relied on.',
+    schema: z.object({
+      finding_id: z.string(),
+      decision: z.enum(['admit', 'defer', 'decline']),
+      rationale: z.string().min(10).max(800),
+      precedents: z.array(z.string()).max(10).default([]),
+    }),
+    async run(s, d) {
+      const brief = s.arbiter
+      if (!brief) throw new ToolInputError('only an arbiter session decides')
+      const c = brief.candidates.get(d.finding_id)
+      if (!c) throw new ToolInputError(`${d.finding_id} is not one of the candidates listed in your instructions`)
+      if (brief.decisions.some((x) => x.finding_id === d.finding_id)) throw new ToolInputError(`${d.finding_id} is already decided`)
+      if (d.decision === 'decline' && c.sensitive) throw new ToolInputError('a sensitive finding is not declined: defer it, so a person sees it')
+      const unknown = d.precedents.filter((p) => !brief.precedents.has(p))
+      if (unknown.length) throw new ToolInputError(`not precedents you were shown: ${unknown.join(', ')}`)
+      brief.decisions.push(d)
+      return `${d.decision} recorded (${brief.decisions.length} of ${brief.candidates.size})`
     },
   }),
   def({
@@ -201,10 +224,18 @@ export const WORKSPACE_TOOLS = [
   }),
 ]
 
+/** Which tools a session is offered: an arbiter only reads and decides; only a review records findings. */
+function offered(s: Session, t: (typeof WORKSPACE_TOOLS)[number]): boolean {
+  if (t.write && !s.allowWrite) return false
+  if (t.exec && !s.ws.exec) return false
+  if (t.name === 'record_finding') return s.kind === 'round' || s.kind === 'confirm'
+  if (t.name === 'decide') return s.kind === 'arbiter'
+  if (t.name === 'git_diff') return s.kind !== 'arbiter'
+  return true
+}
+
 export function toolSpecs(s: Session): ToolSpec[] {
-  return WORKSPACE_TOOLS.filter((t) => !t.write || s.allowWrite)
-    .filter((t) => !t.exec || !!s.ws.exec)
-    .filter((t) => !(t.name === 'record_finding' && s.kind === 'author'))
+  return WORKSPACE_TOOLS.filter((t) => offered(s, t))
     .map((t) => {
       const schema = zodToJsonSchema(t.schema, { $refStrategy: 'none' }) as Record<string, unknown>
       delete schema.$schema
@@ -217,6 +248,7 @@ export async function execTool(s: Session, name: string, raw: unknown): Promise<
   if (!tool) throw new ToolInputError(`unknown tool "${name}"`)
   if (tool.write && !s.allowWrite) throw new ToolInputError(`${name} is not available in a review session`)
   if (tool.exec && !s.ws.exec) throw new ToolInputError(`${name} needs the sandbox, and this session has none`)
+  if (!offered(s, tool)) throw new ToolInputError(`${name} is not available in this session`)
   if (s.done && name !== 'finish' && name !== 'cannot') throw new ToolInputError('the session has ended')
   const parsed = tool.schema.safeParse(raw ?? {})
   if (!parsed.success) throw new ToolInputError(`bad arguments: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`)
