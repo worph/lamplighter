@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ago, api, type CheckSettings, type Credential, type Forge, type Group, type RepoCredential, type SettingsView } from '../api'
-import { Badge, Button, Card, ErrorNote, Field, inputCls } from '../components/ui'
+import { AdmissionSelect, Badge, Button, Card, ErrorNote, Field, inputCls } from '../components/ui'
 
 export default function Settings() {
   const q = useQuery({ queryKey: ['settings'], queryFn: api.settings, refetchInterval: 15_000 })
@@ -395,7 +395,7 @@ function Checks({ s }: { s: SettingsView }) {
         <table className="w-full text-sm">
           <thead><tr className="text-left text-xs text-stone-500 border-b border-stone-200 dark:border-stone-800">
             <th className="px-4 py-2 font-medium">Check</th><th className="px-2 py-2 font-medium">Enabled</th><th className="px-2 py-2 font-medium">Delivery</th>
-            <th className="px-2 py-2 font-medium">Armed</th><th className="px-2 py-2 font-medium">Auto-submit</th><th className="px-2 py-2 font-medium">Cadence (days)</th>
+            <th className="px-2 py-2 font-medium">Armed</th><th className="px-2 py-2 font-medium">Auto-submit</th><th className="px-2 py-2 font-medium">Cadence (days)</th><th className="px-2 py-2 font-medium">Admission</th>
           </tr></thead>
           <tbody>
             {s.checks.map((c) => (
@@ -409,6 +409,7 @@ function Checks({ s }: { s: SettingsView }) {
                 <td className="px-2 py-2"><input type="checkbox" checked={c.settings.armed} onChange={(e) => put.mutate({ check: c.kind, p: { armed: e.target.checked } })} /></td>
                 <td className="px-2 py-2"><input type="checkbox" checked={c.settings.auto_submit} onChange={(e) => put.mutate({ check: c.kind, p: { auto_submit: e.target.checked } })} /></td>
                 <td className="px-2 py-2"><input type="number" min={1} className={`${inputCls} !w-20 !py-1`} defaultValue={c.settings.cadence_days} onBlur={(e) => Number(e.target.value) !== c.settings.cadence_days && put.mutate({ check: c.kind, p: { cadence_days: Number(e.target.value) } })} /></td>
+                <td className="px-2 py-2"><AdmissionSelect value={c.settings} onChange={(p) => put.mutate({ check: c.kind, p })} /></td>
               </tr>
             ))}
           </tbody>
@@ -452,7 +453,7 @@ function Schedule({ s }: { s: SettingsView }) {
           {[...sch.running, ...sch.queued].map((j) => (
             <li key={j.id} className="flex items-center gap-2">
               <Badge tone={j.state === 'running' ? 'amber' : 'stone'}>{j.state}</Badge>
-              <span>{j.job === 'author' ? 'fix' : `${j.scope} round`} · {j.check_kind} · {j.repo_key}</span>
+              <span>{j.job === 'author' ? `fix · ${j.check_kind}` : j.job === 'arbitrate' ? 'admission' : `${j.scope} round · ${j.check_kind}`} · {j.repo_key}</span>
               <span className="text-stone-500">{j.foreground ? 'requested' : `tier ${j.tier}`} · {ago(j.created_at)}{j.waiting ? ` · waiting: ${j.waiting}` : ''}</span>
               {j.state === 'queued' && <button className="underline text-stone-500" onClick={() => cancel.mutate(j.id)}>cancel</button>}
             </li>

@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from '
 import { join } from 'node:path'
 import matter from 'gray-matter'
 import { z } from 'zod'
-import { DELIVERIES, type CheckSettings, type Config } from '../config/index.js'
+import { ADMISSIONS, DELIVERIES, LEANS, type CheckSettings, type Config } from '../config/index.js'
 
 /**
  * A check is a file on the volume (`checks/<kind>.md`): frontmatter for the machine, the body is
@@ -57,7 +57,11 @@ const frontSchema = z.object({
     auto_submit: z.boolean(),
     armed: z.boolean(),
     cadence_days: z.number().int().min(1),
+    admission: z.enum(ADMISSIONS).default('arbiter'),
+    lean: z.enum(LEANS).default('admit'),
   }),
+  /** The rule tier (§6.4): findings matching this are admitted without the arbiter, whatever the mode. */
+  always_when: z.object({ severity: z.array(z.enum(['critical', 'major', 'minor'])).min(1) }).optional(),
 })
 
 export type CheckDef = z.infer<typeof frontSchema> & { prompt: string; file: string }

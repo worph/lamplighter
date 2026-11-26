@@ -12,7 +12,8 @@ detectors:            # hints for the review, in the sandbox only: committed sec
     category: secret-in-code
 categories: [injection, authn-authz, secret-in-code, unsafe-deserialization, path-traversal, ssrf, xss, crypto-misuse]
 sensitive: always
-defaults: { enabled: true, delivery: branch, auto_submit: false, armed: false, cadence_days: 14 }
+defaults: { enabled: true, delivery: branch, auto_submit: false, armed: false, cadence_days: 14, admission: arbiter, lean: admit }
+always_when: { severity: [critical, major] }
 ---
 Review the code for exploitable security problems: injection (SQL, command, template, eval),
 missing or broken authentication and authorization, secrets committed to the repository,

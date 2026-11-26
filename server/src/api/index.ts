@@ -4,7 +4,8 @@ import { checkSettingsSchema, identitySchema, inferenceSchema, sandboxSchema, sc
 import type { App } from '../context.js'
 import { now } from '../db/index.js'
 import { listEvents, logEvent } from '../events.js'
-import { dismiss, lastDismissal, listFindings, reopen } from '../findings/index.js'
+import { lastDecision, listFindings } from '../findings/index.js'
+import { personDecides, policyChanged, watchAdmission } from '../admission/index.js'
 import { credentialRow, forgeApi, forgeRow, listCredentials, listForges } from '../forges/index.js'
 import {
   addCredential, asAnyCredential, assertPinnable, checkCredential, checkForge, credentialFor, credentialView, forgeAlert, forgeView,
@@ -24,15 +25,22 @@ import { VERSION } from '../mcp/index.js'
 
 type Lamp = 'lit' | 'dim' | 'out' | 'unlit' | 'off'
 
-/** One light per (repo, check): never run, last round broken, open findings, or clean. */
-function lamps(app: App, repoKey: string): Record<string, { lamp: Lamp; open: number; last?: string; status?: string }> {
+/**
+ * One light per (repo, check): never run, last round broken, work left (raised and not judged yet,
+ * admitted, or in a proposal), or clean. What admission put aside does not dim it (§6.4); `later`
+ * counts it, so green cannot be reached by deferring quietly.
+ */
+export function lamps(app: App, repoKey: string): Record<string, { lamp: Lamp; open: number; later: number; last?: string; status?: string }> {
   const repo = getRepo(app.db, repoKey)
-  const out: Record<string, { lamp: Lamp; open: number; last?: string; status?: string }> = {}
+  const out: Record<string, { lamp: Lamp; open: number; later: number; last?: string; status?: string }> = {}
   for (const def of app.checks.list()) {
     const last = app.db
       .prepare("SELECT status, started_at FROM rounds WHERE repo_key = ? AND check_kind = ? AND kind = 'round' ORDER BY started_at DESC LIMIT 1")
       .get(repoKey, def.kind) as { status: string; started_at: string } | undefined
-    const open = (app.db.prepare("SELECT COUNT(*) AS n FROM findings WHERE repo_key = ? AND check_kind = ? AND state IN ('open','proposed')").get(repoKey, def.kind) as { n: number }).n
+    const count = (states: string) =>
+      (app.db.prepare(`SELECT COUNT(*) AS n FROM findings WHERE repo_key = ? AND check_kind = ? AND state IN (${states})`).get(repoKey, def.kind) as { n: number }).n
+    const open = count("'open','admitted','proposed'")
+    const later = count("'deferred','declined'")
     // A running round has no verdict yet: the light is the last finished round's, so a check's first
     // round shows unlit, not lit with nothing found.
     const done = last?.status === 'running'
@@ -42,7 +50,7 @@ function lamps(app: App, repoKey: string): Record<string, { lamp: Lamp; open: nu
       : last
     const enabled = settingsFor(app, repo, def).enabled
     const lamp: Lamp = !enabled ? 'off' : !done ? 'unlit' : done.status === 'blocked' || done.status === 'failed' ? 'out' : open ? 'dim' : 'lit'
-    out[def.kind] = { lamp, open, last: last?.started_at, status: last?.status }
+    out[def.kind] = { lamp, open, later, last: last?.started_at, status: last?.status }
   }
   return out
 }
@@ -85,7 +93,8 @@ export function registerApi(f: FastifyInstance, app: App): void {
     return {
       version: VERSION,
       repos: counts('SELECT COUNT(*) AS n FROM repos'),
-      open_findings: counts("SELECT COUNT(*) AS n FROM findings WHERE state = 'open'"),
+      open_findings: counts("SELECT COUNT(*) AS n FROM findings WHERE state IN ('open','admitted','proposed')"),
+      not_now: counts("SELECT COUNT(*) AS n FROM findings WHERE state IN ('deferred','declined')"),
       inbox: counts("SELECT COUNT(*) AS n FROM activity WHERE state = 'open'"),
       schedule: app.schedule(),
       inference: { driver: app.config.current.inference.driver, url: app.config.current.inference.url },
@@ -126,7 +135,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
       credential: credentialOf(app, r),
       credentials: listCredentialsView(app, r.forge_id),
       checks: app.checks.list().map((def) => ({ kind: def.kind, title: def.title, scopes: def.scopes, agent: def.agent, settings: settingsFor(app, r, def) })),
-      findings: listFindings(app.db, { repo: key, limit: 500 }).map((x) => ({ ...x, dismissal: x.state === 'dismissed' ? lastDismissal(app.db, x.id) : undefined })),
+      findings: listFindings(app.db, { repo: key, limit: 500 }).map((x) => ({ ...x, decision: lastDecision(app.db, x.id) })),
       rounds: app.db.prepare('SELECT id, check_kind, kind, scope, status, summary, error, trigger, base_sha, head_sha, proposal_id, started_at, ended_at FROM rounds WHERE repo_key = ? ORDER BY started_at DESC LIMIT 60').all(key),
       proposals: app.db.prepare('SELECT id, check_kind, state, delivery, branch, base_sha, head_sha, summary, error, submitted_ref, created_at, updated_at FROM proposals WHERE repo_key = ? ORDER BY created_at DESC LIMIT 30').all(key),
       events: listEvents(app.db, { repo: key, limit: 50 }),
@@ -143,6 +152,7 @@ export function registerApi(f: FastifyInstance, app: App): void {
     if (body.group_id) getGroup(app.db, body.group_id)
     if (body.credential_id !== undefined) assertPinnable(app.db, body.credential_id, r.forge_id)
     for (const [col, v] of Object.entries(body)) if (v !== undefined) app.db.prepare(`UPDATE repos SET ${col} = ? WHERE key = ?`).run(v, key)
+    if (body.policy !== undefined && body.policy !== r.policy) policyChanged(app, { repo: key })
     if (body.credential_id !== undefined || body.group_id) {
       logEvent(app.db, { level: 'warn', code: 'REPO_CREDENTIAL', repo: key, message: `credential: ${credentialOf(app, getRepo(app.db, key))?.label ?? 'none'} (${body.credential_id === undefined ? 'group changed' : body.credential_id ? 'pinned' : 'unpinned'} by operator)` })
       forgeAlert(app, r.forge_id)
@@ -188,18 +198,20 @@ export function registerApi(f: FastifyInstance, app: App): void {
     s.checks = { ...(s.checks ?? {}) }
     if (settings === null || Object.keys(settings).length === 0) delete s.checks[check]
     else s.checks[check] = settings
-    app.db.prepare('UPDATE repos SET settings_json = ? WHERE key = ?').run(JSON.stringify(s), key)
+    watchAdmission(app, check, [r], () => app.db.prepare('UPDATE repos SET settings_json = ? WHERE key = ?').run(JSON.stringify(s), key))
     return { ok: true }
   })
 
   // ── findings, rounds, proposals ───────────────────────────────────────────────────────
   f.post('/api/v1/findings/:id/dismiss', async (req) => {
     const { reason } = z.object({ reason: z.string().min(3) }).parse(req.body)
-    const x = dismiss(app.db, (req.params as { id: string }).id, reason, 'operator')
-    logEvent(app.db, { code: 'DISMISSED', repo: x.repo_key, message: `${x.title} — dismissed: ${reason}` })
-    return x
+    return personDecides(app, (req.params as { id: string }).id, 'dismiss', reason, 'operator')
   })
-  f.post('/api/v1/findings/:id/reopen', async (req) => reopen(app.db, (req.params as { id: string }).id))
+  f.post('/api/v1/findings/:id/take', async (req) => {
+    const { reason } = z.object({ reason: z.string().max(800).default('') }).parse(req.body ?? {})
+    return personDecides(app, (req.params as { id: string }).id, 'take', reason, 'operator')
+  })
+  f.post('/api/v1/findings/:id/reopen', async (req) => personDecides(app, (req.params as { id: string }).id, 'reopen', '', 'operator'))
 
   f.get('/api/v1/rounds/:id', async (req) => {
     const r = app.db.prepare('SELECT * FROM rounds WHERE id = ?').get((req.params as { id: string }).id)
@@ -275,7 +287,8 @@ export function registerApi(f: FastifyInstance, app: App): void {
   f.put('/api/v1/settings/checks/:check', async (req) => {
     const check = (req.params as { check: string }).check
     if (!app.checks.get(check)) throw new Error(`no check ${check}`)
-    return app.config.update(['checks', check], checkSettingsSchema.parse(req.body)).checks[check]
+    const settings = checkSettingsSchema.parse(req.body)
+    return watchAdmission(app, check, listRepos(app.db), () => app.config.update(['checks', check], settings).checks[check])
   })
   f.post('/api/v1/settings/checks/reload', async () => {
     app.checks.reload()
@@ -367,7 +380,10 @@ export function registerApi(f: FastifyInstance, app: App): void {
     getGroup(app.db, id)
     const b = z.object({ name: z.string().optional(), policy: z.string().optional(), credential_id: z.string().nullable().optional() }).parse(req.body)
     if (b.name !== undefined) app.db.prepare('UPDATE groups SET name = ? WHERE id = ?').run(b.name, id)
-    if (b.policy !== undefined) app.db.prepare('UPDATE groups SET policy = ? WHERE id = ?').run(b.policy, id)
+    if (b.policy !== undefined && b.policy !== getGroup(app.db, id).policy) {
+      app.db.prepare('UPDATE groups SET policy = ? WHERE id = ?').run(b.policy, id)
+      policyChanged(app, { group: id })
+    }
     if (b.credential_id !== undefined) {
       assertPinnable(app.db, b.credential_id)
       app.db.prepare('UPDATE groups SET credential_id = ? WHERE id = ?').run(b.credential_id, id)

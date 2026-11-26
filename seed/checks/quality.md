@@ -5,7 +5,7 @@ revision: 1
 scopes: [diff, full]
 agent: review
 categories: [leftover-debug, commented-out-code, todo-rot, inconsistent-naming, swallowed-error, magic-value]
-defaults: { enabled: true, delivery: pr, auto_submit: false, armed: true, cadence_days: 14 }
+defaults: { enabled: true, delivery: pr, auto_submit: false, armed: true, cadence_days: 14, admission: arbiter, lean: admit }
 ---
 Find cleanliness problems: leftover debug output, commented-out code, TODO/FIXME that are stale,
 naming that contradicts the codebase's own convention, errors caught and ignored, unexplained

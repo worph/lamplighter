@@ -82,19 +82,26 @@ Where only a model can see it, the model does both, and the result is held to th
 2. **Findings.** A round produces findings. Each has a stable fingerprint, and the next round
    recognises "the same thing as last week" semantically, not by line number. A finding that a
    person **dismissed with a reason** stays dismissed until what it was about changes.
-3. **Proposals.** When a check's delivery is anything but `report`, a fixing session writes a
-   change in a throwaway worktree and Lamplighter commits it. **The session that wrote a fix
+3. **Admission.** Raising a finding does not make it work. Each check's rule admits (`cve`, and
+   `security` at critical or major) or holds for a person (`architecture`); the rest go to an
+   **arbiter**: one session per repo, across checks, that weighs the policy, the backlog and past
+   decisions (a person's first) and admits, defers (*not now*) or declines each finding with a
+   rationale. Not-now findings stay visible and are judged again when the code, the policy or a
+   person's decision changes; **Take it** makes one work at once. A lamp is green when nothing
+   admitted is left, with the not-now count beside it.
+4. **Proposals.** When a check's delivery is anything but `report`, a fixing session writes a
+   change for its admitted findings in a throwaway worktree and Lamplighter commits it. **The session that wrote a fix
    never judges it**: a fresh, independent session reviews the diff and must find the issues gone
    and nothing new. With the sandbox on, the fix is also judged by the repository's own tests, run on
    the base and on the proposal in fresh containers, and by the scanners run again on both.
-4. **Delivery.** Per check, per repo group, per repo, for every check alike: `report` (the round's
+5. **Delivery.** Per check, per repo group, per repo, for every check alike: `report` (the round's
    report lands in Activity, no code), `branch`, `pr` or `push`, each
    with an *auto-submit* switch saying whether a person approves first. Bare git has no PRs, so
    it is `branch` or `push` only. Each forge holds one credential per account (you, an org, a
    bot), set in Settings → Forges, Touchstone-style (write-only, checked on save). A repo uses
    the credential pinned on it or its group, else the one that may push there; a repo no
    credential can push to is **blocked from fixing** (rounds and reports only) and says so in the UI.
-5. **Activity.** Everything that needs a person lands in Activity, Newsdesk-style: a PR to
+6. **Activity.** Everything that needs a person lands in Activity, Newsdesk-style: a PR to
    review, a branch to merge, a report to read, a proposal to approve, an alert. Each item has its
    actions inline (approve, reject, dismiss with reason), and every decision is recorded
    next to what the model proposed, so the policy can be tightened from real overrides.
@@ -118,7 +125,7 @@ discloses the hole before the fix ships, so for any repo the forge reports as pu
 | Page | What it is for |
 |---|---|
 | **Chat** (front page) | the administrator chat: ask about any repo, request a round, edit policy; decisive actions (merge, push, delete a branch) need a typed confirmation, the same as Newsdesk's |
-| **Repos** | the fleet: every repo with a light per check (lit, dim, out, never run), filters by group/forge/visibility; a repo page shows findings, rounds, proposals and its policy |
+| **Repos** | the fleet: every repo with a light per check (lit, dim, out, never run) and its not-now count, filters by group/forge/visibility; a repo page shows findings, rounds, proposals and its policy |
 | **Activity** | the inbox of things awaiting a person, and below it the log of everything that happened |
 | **Settings** | forges and credentials, groups and policy inheritance, check defaults and delivery switches, schedule, queue and budget, the inference endpoint (driver, URL, token, Test), the admin MCP token |
 

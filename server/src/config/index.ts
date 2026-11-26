@@ -12,6 +12,12 @@ import type { Env } from '../env.js'
 export const DELIVERIES = ['report', 'branch', 'pr', 'push'] as const
 export type Delivery = (typeof DELIVERIES)[number]
 
+/** How a check's findings become work (§6.4): by rule, by the arbiter, or only when a person takes one. */
+export const ADMISSIONS = ['always', 'arbiter', 'manual'] as const
+export type Admission = (typeof ADMISSIONS)[number]
+/** The arbiter's starting position for a check. */
+export const LEANS = ['admit', 'defer'] as const
+
 export const checkSettingsSchema = z
   .object({
     enabled: z.boolean(),
@@ -19,6 +25,8 @@ export const checkSettingsSchema = z
     auto_submit: z.boolean(),
     armed: z.boolean(),
     cadence_days: z.number().int().min(1).max(365),
+    admission: z.enum(ADMISSIONS),
+    lean: z.enum(LEANS),
   })
   .partial()
 export type CheckSettings = z.infer<typeof checkSettingsSchema>

@@ -14,7 +14,7 @@ export default function Round() {
     <div className="space-y-4 max-w-4xl">
       <div>
         <Link to={`/repos/${encodeURIComponent(r.repo_key!)}`} className="text-xs text-stone-500 hover:underline">← {r.repo_key}</Link>
-        <h1 className="text-xl font-semibold">{r.check_kind} · {r.kind === 'round' ? `${r.scope} round` : r.kind === 'author' ? 'fixing session' : 'validation session'}</h1>
+        <h1 className="text-xl font-semibold">{r.kind === 'arbitrate' ? 'admission · arbiter session' : `${r.check_kind} · ${r.kind === 'round' ? `${r.scope} round` : r.kind === 'author' ? 'fixing session' : 'validation session'}`}</h1>
         <div className="mt-1 flex flex-wrap gap-2 items-center text-xs text-stone-500">
           <Badge tone={stateTone(r.status)}>{r.status}</Badge>
           <span>{r.trigger}</span>

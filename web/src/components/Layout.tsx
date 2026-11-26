@@ -44,7 +44,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           {overview.error ? <div className="text-red-600">API unreachable</div> : null}
           {o && (
             <>
-              <div>{o.repos} repos · {o.open_findings} open findings</div>
+              <div>{o.repos} repos · {o.open_findings} open findings{o.not_now ? ` · ${o.not_now} not now` : ''}</div>
               <div>{busy ? `${o.schedule.running.length} running · ${o.schedule.queued.length} queued` : 'idle'}</div>
               <div>sessions this hour {o.schedule.budget.sessions_this_hour}/{o.schedule.budget.sessions_per_hour}</div>
               <div className="truncate" title={o.inference.url}>{o.inference.driver}</div>

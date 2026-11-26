@@ -52,16 +52,17 @@ function setState(app: App, id: string, state: ProposalState, extra: { error?: s
 }
 
 /**
- * Hand the proposal's findings back. `block` remembers that this input was tried, so the same
- * findings are not proposed again until what they are about changes.
+ * Hand the proposal's findings back. Back to `admitted`, not `open`: the work was wanted, this
+ * attempt was not (§6.2). `block` remembers that this input was tried, so the same findings are
+ * not proposed again until what they are about changes.
  */
-function releaseFindings(app: App, p: ProposalRow, to: 'open' | 'fixed', block: boolean) {
+function releaseFindings(app: App, p: ProposalRow, to: 'admitted' | 'fixed', block: boolean) {
   const t = now()
   for (const id of JSON.parse(p.finding_ids) as string[]) {
     if (to === 'fixed') app.db.prepare("UPDATE findings SET state = 'fixed', updated_at = ? WHERE id = ? AND proposal_id = ?").run(t, id, p.id)
     else
       app.db
-        .prepare(`UPDATE findings SET state = 'open', proposal_id = NULL, blocked_input = ${block ? 'input_hash' : 'blocked_input'}, updated_at = ? WHERE id = ? AND proposal_id = ?`)
+        .prepare(`UPDATE findings SET state = 'admitted', proposal_id = NULL, blocked_input = ${block ? 'input_hash' : 'blocked_input'}, updated_at = ? WHERE id = ? AND proposal_id = ?`)
         .run(t, id, p.id)
   }
 }
@@ -69,7 +70,7 @@ function releaseFindings(app: App, p: ProposalRow, to: 'open' | 'fixed', block: 
 export function failProposal(app: App, id: string, reason: string, opts: { block?: boolean } = {}) {
   const p = mustGet(app, id)
   setState(app, id, 'failed', { error: reason })
-  releaseFindings(app, p, 'open', opts.block ?? true)
+  releaseFindings(app, p, 'admitted', opts.block ?? true)
   logEvent(app.db, { level: 'warn', code: 'PROPOSAL_FAILED', repo: p.repo_key, message: `${p.check_kind} proposal failed: ${reason.slice(0, 300)}`, detail: { proposal: id } })
 }
 
@@ -203,7 +204,7 @@ export async function deliver(app: App, id: string, by: string): Promise<Proposa
   } catch (err) {
     if (err instanceof LineMovedError) {
       setState(app, id, 'stale', { error: err.message })
-      releaseFindings(app, p, 'open', false)
+      releaseFindings(app, p, 'admitted', false)
       resolveFor(app.db, id, 'stale', err.message)
       logEvent(app.db, { level: 'warn', code: 'PROPOSAL_STALE', repo: repo.key, message: err.message, detail: { proposal: id } })
     }
@@ -241,7 +242,7 @@ export async function mergeBranch(app: App, id: string, by: string): Promise<Pro
   } catch (err) {
     if (err instanceof LineMovedError) {
       setState(app, id, 'stale', { error: err.message })
-      releaseFindings(app, p, 'open', false)
+      releaseFindings(app, p, 'admitted', false)
       resolveFor(app.db, id, 'stale', err.message)
     }
     throw err
@@ -264,7 +265,7 @@ export async function rejectProposal(app: App, id: string, reason: string, by: s
   const item = openItemFor(app.db, id)
   recordOverride(app.db, { activity: item?.id, proposed: { proposal: id, summary: p.summary }, decided: 'rejected', reason })
   setState(app, id, 'rejected', { error: reason || undefined })
-  releaseFindings(app, p, 'open', true)
+  releaseFindings(app, p, 'admitted', true)
   resolveFor(app.db, id, 'rejected', reason)
   logEvent(app.db, { code: 'REJECTED', repo: repo.key, message: `${p.check_kind} proposal rejected by ${by}: ${reason}`, detail: { proposal: id } })
   return mustGet(app, id)
@@ -295,7 +296,7 @@ export async function revertPush(app: App, id: string, by: string): Promise<Prop
   setState(app, id, 'reverted')
   const t = now()
   for (const fid of JSON.parse(p.finding_ids) as string[]) {
-    app.db.prepare("UPDATE findings SET state = 'open', proposal_id = NULL, blocked_input = input_hash, updated_at = ? WHERE id = ?").run(t, fid)
+    app.db.prepare("UPDATE findings SET state = 'admitted', proposal_id = NULL, blocked_input = input_hash, updated_at = ? WHERE id = ?").run(t, fid)
   }
   recordOverride(app.db, { activity: openItemFor(app.db, id)?.id, proposed: { proposal: id }, decided: 'reverted' })
   resolveFor(app.db, id, 'reverted')
@@ -321,7 +322,7 @@ export async function pollPullRequests(app: App): Promise<void> {
         resolveFor(app.db, p.id, 'merged')
       } else {
         setState(app, p.id, 'rejected', { error: 'PR closed without merge' })
-        releaseFindings(app, p, 'open', true)
+        releaseFindings(app, p, 'admitted', true)
         recordOverride(app.db, { proposed: { proposal: p.id }, decided: 'pr-closed' })
         resolveFor(app.db, p.id, 'closed')
       }

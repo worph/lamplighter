@@ -4,7 +4,9 @@
 describes, the section says so in a **v1:** note; everything else is how the code works. The
 session sandbox (D8, §10.1) is built since **0.7.0, 2026-11-25**; a **v1 mode:** note says what a
 box without it does. The reasoning and the measurements behind it are in
-[study-sandbox.md](study-sandbox.md).
+[study-sandbox.md](study-sandbox.md). **Admission** (D9, §6.4: who decides which findings become
+work) is built since **0.8.0, 2026-11-26**. Findings from forge issues and feedback (D10, §6.5) are
+**future**: only their schema hooks are in; those sections say so.
 
 ---
 
@@ -22,6 +24,8 @@ box without it does. The reasoning and the measurements behind it are in
 | D6 | Delivery modes | Per check type, like Touchstone's workshop switches: `report`, `branch`, `pr`, `push`, plus *auto-submit* and *armed*. |
 | D7 | Review flow | Branches and PRs raise an item in **Activity** for a person to act on, the Newsdesk flow. |
 | D8 | Running repo code | **A container per session** (the sandbox, §10.1), driven from outside through the Docker API. The agent stays outside; only its tools run inside. Credential-free: what it protects is the forge tokens, and only that. Shell and network allowed inside. No image of our own: an official base plus toolchains installed on demand. *Decided and built 2026-11-25 (0.7.0).* It replaced the "runner sidecar" first planned. |
+| D9 | What becomes work | **Producer and arbiter.** A round's session stays narrow and only *raises* findings; a separate **arbiter**, per repo and across checks, with the policy and the history of past decisions, **admits**, **defers** or **declines** each one with a rationale. A person can take any deferred or declined item. The lamp stays binary in spirit (green = nothing admitted is left). Severity is not a gate. *Built 2026-11-26 (0.8.0)* (§6.4). |
+| D10 | Where findings come from | **Rounds, forge issues and user feedback**, all as findings with a `source`, all through the same arbiter. Issue text is untrusted data, restated by an intake session before anything acts on it. *Designed 2026-11-26, future* (§6.5): 0.8.0 has the `source` columns and nothing that fills them but rounds. |
 
 ---
 
@@ -34,11 +38,15 @@ The family's habit is to be careful with words and rename before building, not a
 | **forge** | where a repo lives and how to talk to it: `github`, `gitea`, `git` (a bare remote URL, SSH or HTTPS). One configured forge = one host, holding one **credential** per account Lamplighter speaks as there (you, an org's token, a bot). |
 | **repo** | one monitored repository on one forge, with a tracked **line** (the branch Lamplighter keeps well: usually the default branch). Identity: `<forge>~<owner>/<name>`, e.g. `github~worph/Touchstone`. `~` for the same reason as Touchstone: it survives `encodeURIComponent`. |
 | **group** | a set of repos that share policy and defaults: typically an org (`yundera`, `nsl`, `worph`). A repo belongs to exactly one group. Settings inherit **default → group → repo**. |
-| **check** | one kind of upkeep: `docs`, `cve`, `deps`, `dead-code`, `refactor`, `quality`, `patterns`, `architecture`, `security`. Each is a file, `data/checks/<kind>.md` (§5). |
-| **lamp** | the state of one check on one repo: *lit* (clean as of a recent round), *dim* (open findings), *out* (failing/blocked), *unlit* (never run). The Repos page is a grid of lamps. |
+| **check** | one kind of upkeep: `docs`, `cve`, `deps`, `dead-code`, `refactor`, `quality`, `patterns`, `architecture`, `security`, and (future) `request`, the home of a change someone asked for that fits no other check (§6.5). Each is a file, `data/checks/<kind>.md` (§5). A check is also **which fixer handles a finding**, not only who found it. |
+| **lamp** | the state of one check on one repo: *lit* (nothing admitted is left), *dim* (admitted or not yet arbitrated findings), *out* (failing/blocked), *unlit* (never run), *off* (disabled). Deferred and declined findings do not dim a lamp; their count is shown beside it ("lit · 3 not now"). The Repos page is a grid of lamps. |
 | **round** | one run of one check against one repo **at one commit**, with a **scope**: `diff` (the commits since the last round) or `full`. A round writes a report and produces findings. It never changes code. |
-| **finding** | one issue a round raised, with a **fingerprint** (§6) that survives line moves and re-wording. Lifecycle: `open → (dismissed | proposed | fixed | gone)`. |
-| **dismissal** | a person saying *won't fix*, with a reason. It holds until the finding's **input** changes (the file(s) it is about, or the check's revision). Touchstone's task memory, applied to findings. |
+| **finding** | one issue raised by a **source** (a round, a forge issue, user feedback), with a **fingerprint** (§6) that survives line moves and re-wording. Lifecycle in §6.2. |
+| **source** | where a finding came from: `round`, `issue` (a forge issue, with its URL) or `feedback` (a person or the MCP asking in Lamplighter). Only `round` exists in 0.8.0 (§6.5). |
+| **arbiter** | the session that decides admission for one repo: reads the candidates, the policy and the **precedents**, and records one decision per finding. It writes no finding and no code (§6.4). |
+| **decision** | one recorded judgement on a finding: `admit`, `defer` (*not now*), `decline`, `dismiss`, `take`, `reopen`, by `rule`, `arbiter`, `user` or `mcp`, with a rationale and the input it was made against. The decision log is the arbiter's history. |
+| **precedent** | a past decision the arbiter reads when it judges a similar finding (same repo, check and category first). A person's decisions outweigh the arbiter's own. |
+| **dismissal** | a person saying *won't fix*, with a reason: a `dismiss` decision. It holds until the finding's **input** changes (the file(s) it is about, or the check's revision). Touchstone's task memory, applied to findings. |
 | **proposal** | one candidate change to one repo, addressing one or more findings of one check. Lifecycle in §7. A proposal **never judges its own work**. |
 | **validation** | what can make a proposal `ready`: the repo's build/test/lint, plus a **confirming round** (§7.3). |
 | **delivery** | how a ready proposal lands: `report` (none), `branch`, `pr`, `push`. |
@@ -82,6 +90,16 @@ These are the rules the design is built around. Code that breaks one is a bug ev
    a person in Activity, or the chat with a typed confirmation.
 10. **Diagnosable with every port broken.** No forge, no inference, no network: the app still boots,
     serves its UI, and says what is wrong.
+11. **Who raises does not admit.** A producer records findings and never decides whether
+    they become work; the arbiter decides and never records a finding or writes code. Only an
+    admitted finding can enter a proposal.
+12. **A decision holds until something it rested on changes** (invariant 7 generalised).
+    A deferred or declined finding is judged again only when its input, the policy, the check's
+    revision or a precedent in its category changes, or a person takes it. The arbiter does not
+    flip on the same facts.
+13. **Outside text is data** (future, with §6.5). An issue's title, body and comments never reach a fixing or
+    arbitrating session as instructions: an intake session restates them as a finding, flagged
+    with the author's trust, and only the restatement travels on.
 
 ---
 
@@ -95,7 +113,9 @@ lamplighter (backend, one Node process)
 ├── triggers/      webhook receivers (GitHub, Gitea), poller (ls-remote for bare git), cron
 ├── scheduler/     the queue, tiers, budget, slots, debounce
 ├── rounds/        detector runs + the agent call for a round; report writer
-├── findings/      fingerprinting, dedup, lifecycle, dismissals
+├── findings/      fingerprinting, dedup, lifecycle, decisions
+├── admission/     rules, the arbiter session, precedents (§6.4)
+├── intake/        forge issues and feedback → findings (future, §6.5)
 ├── workshop/      proposals: authoring session, validation, delivery
 ├── activity/      items, actions, the event log, web push
 ├── chat/          administrator chat (the Touchstone/Newsdesk loop)
@@ -146,6 +166,10 @@ delivery:
   auto_submit: false        # true: passing validation is the approval
   batch: per-finding        # per-finding | per-round | weekly
   sensitive: when-reachable # never | when-reachable | always (§9)
+defaults: { enabled: true, delivery: report, auto_submit: false, armed: false, cadence_days: 1,
+            admission: always,  # always | arbiter | manual (§6.4); overridable like delivery
+            lean: admit }       # admit | defer: the arbiter's starting position for this check
+always_when: { severity: [critical, major] }   # rule tier: these skip the arbiter (security uses it)
 ---
 You are triaging vulnerability reports for one repository…
 ```
@@ -165,17 +189,18 @@ You are triaging vulnerability reports for one repository…
 
 Default shape of the nine:
 
-| Check | `agent` | scopes | default delivery | batch |
-|---|---|---|---|---|
-| docs | review | diff, full | push, auto | per-round |
-| cve | triage | diff, full | pr | per-finding |
-| deps | none → review on major | full | pr | patch+minor weekly; major per-finding |
-| dead-code | triage | full | pr | weekly |
-| refactor | review | full | pr | weekly |
-| quality | triage | diff, full | pr | weekly |
-| patterns | triage | diff, full | pr | weekly |
-| architecture | review | full | report | n/a |
-| security | review | diff, full | branch, sensitive: always | per-finding |
+| Check | `agent` | scopes | default delivery | batch | admission |
+|---|---|---|---|---|---|
+| docs | review | diff, full | push, auto | per-round | arbiter, lean admit |
+| cve | triage | diff, full | pr | per-finding | always when a fix exists; else deferred by rule until one does |
+| deps | none → review on major | full | pr | patch+minor weekly; major per-finding | arbiter, lean admit |
+| dead-code | triage | full | pr | weekly | arbiter, lean admit |
+| refactor | review | full | pr | weekly | arbiter, lean defer |
+| quality | triage | diff, full | pr | weekly | arbiter, lean admit |
+| patterns | triage | diff, full | pr | weekly | arbiter, lean admit |
+| architecture | review | full | report | n/a | manual |
+| security | review | diff, full | branch, sensitive: always | per-finding | always when critical or major; else arbiter, lean admit |
+| request (future) | none (intake) | n/a | pr | per-finding | always from a person in the UI; else arbiter, lean admit |
 
 The default delivery is only a seed: **every check accepts every mode** (`report`, `branch`, `pr`,
 `push`), chosen by the maintainer per check, group or repo. No check is report-only by nature.
@@ -203,16 +228,27 @@ fingerprint = hash(check kind, rule/category, primary symbol or file path, norma
 
 ### 6.2 Lifecycle
 
+Since 0.8.0, `open` means *raised, not yet judged*, and admission (§6.4) sits between it and a
+proposal. (Until 0.7, an open finding was fixable as raised.)
+
 ```
-          ┌──────── round no longer finds it ─────────► gone
-open ─────┼──────── person dismisses (reason) ────────► dismissed ─(input changed)─► open
-          └──────── proposal created ─► proposed ─► fixed (on the line) │ back to open (rejected)
+                     ┌─ rule / arbiter ─► admitted ─ proposal ─► proposed ─► fixed
+open (raised) ───────┼─ rule / arbiter ─► deferred ──┐            └─ rejected ─► admitted
+                     └─ arbiter ────────► declined ──┼─ person takes ─► admitted
+                                                     └─ held fact changed ─► open (judged again)
+any state ── person dismisses ─► dismissed ─(input changed)─► open
+any state ── source no longer reports it ─► gone
 ```
 
 - **gone** vs **fixed**: *fixed* means a Lamplighter proposal landed; *gone* means someone else
-  fixed it, or the code was deleted. Both are recorded so the override rate is honest.
-- A finding's **input** is the set of file blob hashes it anchors to, plus the check revision.
-  A dismissal stores the input; it re-opens only if the input differs (invariant 7).
+  fixed it, or the code was deleted (or the issue was closed). Both are recorded so the override
+  rate is honest.
+- A finding's **input** is what its producer hashed: for a round, the set of file blob hashes it
+  anchors to plus the check revision; for an issue, its title, body and trusted comments. A
+  decision (a dismissal, a deferral, a decline) stores the input; it re-opens only if the input
+  differs (invariants 7, 12).
+- A rejected proposal returns its findings to **admitted**, not to `open`: the work was wanted,
+  this attempt was not, and the failed input is remembered against the proposal (§7.1).
 
 ### 6.3 Reports
 
@@ -221,6 +257,110 @@ to read. The database stores findings as rows; the report is the narrative aroun
 check's delivery is `report`, the report is what the maintainer gets: an Activity item for each
 round that surfaced new or reopened findings, and for every full LLM review. A newer one
 supersedes the unread one for the same repo and check.
+
+### 6.4 Admission
+
+Lamplighter fixes what it is allowed to fix, and a person mostly looks at green. So the decision
+that matters is not *how bad* a finding is but **whether it becomes work**. A round's session is
+the wrong place for that: it sees one check, one scope, no backlog, and its independence is what
+makes it a good producer. Admission is a second, adversarial step with the whole repo in view.
+
+**Three tiers, cheapest first.** Each finding is judged once, when it is raised, and again only
+under invariant 12.
+
+1. **Rule.** The check's `admission` frontmatter, overridable per group and repo. `always` (or a
+   matching `always_when`) admits with no session; `manual` defers with no session, so only a
+   person can take it. A rule decision is recorded as `by: rule`, and the arbiter cannot overturn
+   it.
+2. **Arbiter.** Everything else goes to one arbiter session **per repo**, run after a batch of
+   rounds settles (debounced like diff rounds), across all checks at once. It records one
+   `decide(finding, admit | defer | decline, rationale, precedents[])` per candidate.
+3. **Person.** At any time, on any deferred or declined finding: **take it** (admit), **no**
+   (dismiss, with a reason), or re-judge. A person's decision always wins and becomes a precedent.
+
+**What the arbiter reads**, and only this, through a read-only toolset:
+
+- the candidates (title, body, check, category, anchor, severity, sensitive flag; later their
+  source and its trust, §6.5) and each check's `lean`;
+- the repo and group **policy** prose and `LAMPLIGHTER.md`;
+- **precedents**: recent decisions on the same repo, check and category, then the group, then the
+  fleet; a person's decisions first. It must cite the ones it relied on, so its rationale can be
+  checked;
+- what is **in flight** (admitted, proposed, open PRs) and the attention caps (§8.3);
+- `read_file` / `grep` on the line, to judge how large a change would be. No write tools.
+
+Its rationale is one or two sentences a maintainer would accept: *"Deferred: a third refactor of
+`sessions/` while two are open; you deferred the last two in this module (d_81, d_93)."*
+
+**What it may not do.** It cannot defer what a rule admitted, cannot admit what a rule made
+manual, and cannot decline a `sensitive` finding: those it may only defer, with a reason, so a
+person sees them. A decision is per finding; it does not edit, merge or re-word findings (dedup
+stays in §6.1).
+
+**When it is judged again** (invariant 12), a deferred or declined finding goes back to `open`
+with a `reopen` decision by rule, and its repo's arbitration is queued:
+
+- a round raises it again and its input changed, its check's revision moved past the decision, or
+  the decision is older than the check's `cadence_days`;
+- the arbiter put it aside, and the repo's or group's policy changed, or a **person** took or
+  dismissed a finding in the same repo + check + category (a rule's deferral depends on neither);
+- the check's effective `admission` or `lean` changed for the repo: its findings go back through
+  the rules first.
+
+Otherwise the decision stands, and a round that raises the same finding again leaves it as it is.
+
+**Failure.** No inference, a timeout, a malformed answer: invariant 6. The candidates stay
+`open` (the lamp is dim, honestly: nothing has been decided), an alert is raised, and nothing is
+admitted by default. A rule tier still works without inference.
+
+**The lamp** counts admitted and still-`open` findings. Deferred and declined ones are shown as
+a count beside it, and the repo page lists them with their rationale, so *green* cannot be
+reached by deferring quietly. The Repos grid shows the same count per lamp.
+
+**Attention** (§8.3) is still enforced by the scheduler: admission says *what* is wanted, the
+caps say *how much at once*. Admitted findings wait their turn; the arbiter is told the caps so it
+does not admit a backlog that would take months to drain.
+
+### 6.5 Sources: issues and feedback (future)
+
+**Not in 0.8.0.** What is in: findings carry `source` (always `round` today) and `source_ref`,
+and a full round retires only what rounds raised, so a later source's findings are not swept as
+*gone* by a check that never raised them. The rest of this section is the design to build on.
+
+A finding has a **source** and a **source ref**. Rounds are one source; two more feed the same
+store, the same arbiter and the same fixers.
+
+**Forge issues** (GitHub, Gitea; bare git has none). Per repo or group:
+`issues: { mode: off | labelled | all, label: lamplighter }`, default `labelled`. They are polled
+with the repo (webhooks when they can arrive). An **intake** session, one per issue and input,
+restates the issue as zero or more findings: a check (or `request` when no maintenance check
+fits), a category, an anchor where it can find one, and a body in its own words. The intake
+session can read the code; it cannot admit, decline or fix (invariant 11). An issue it cannot
+place becomes one `request` finding with *"unclear"* and goes to the arbiter like any other.
+
+- **Identity.** An issue-sourced finding's fingerprint is its source ref (`#42`, plus a
+  sub-index when an issue yields several), not its check, so re-classifying it to another check
+  keeps its identity, decisions and history. Its input is the hash of the title, body and
+  trusted comments: an edit re-judges it, a 👍 does not.
+- **Trust.** The author's permission on the repo, read from the forge: `maintainer` (write
+  access), `outsider` otherwise. An outsider's issue is never admitted by rule: it always goes to
+  the arbiter, flagged, and invariant 13 holds for both kinds.
+- **Closing the loop.** A proposal addressing an issue-sourced finding says `Refs #42` in its
+  PR body (or `Fixes #42`, per policy). Commenting on the issue (a decline's rationale, a deferral)
+  needs *issues: write* on the token, which v1 deliberately lacks, so it is a per-group switch,
+  default off. An issue closed on the forge makes its findings `gone`.
+- **Sensitive.** An issue on a public repo is already public; a security finding it yields still
+  follows §9.1 for the fix.
+
+**Feedback**: a person or a client asking from inside Lamplighter.
+
+- **A request**: *"make the settings page validate the URL"*, from the repo page, the chat or the
+  admin MCP (`submit_feedback(repo, text)`). It goes through intake like an issue. From a person
+  in the UI or the chat, it is admitted by rule (a person asked). From the MCP it goes to the
+  arbiter, since the MCP cannot decide (invariant 9).
+- **A judgement on a finding**: *take it*, *no, because…*, *not this one, but the pattern is
+  right*. That is a decision with a reason, and it becomes a precedent. There is no separate
+  feedback store: the decision log is it.
 
 ---
 
@@ -238,7 +378,7 @@ drafting → validating → ready → (awaiting approval) → submitted → land
 1. The backend creates a worktree from the mirror at the round's commit:
    `/DATA/work/<proposal-id>`, on a local branch `lamplighter/<kind>/<slug>-<yyyymmdd>-<id6>`.
 2. One agent session (`query_claude`, `workdir` = the worktree, `sessionId` = the proposal id) gets
-   the findings, the check's prompt, the policy, the repo's `CLAUDE.md`/`LAMPLIGHTER.md`, and the
+   the findings (**admitted** ones only, §6.4), the check's prompt, the policy, the repo's `CLAUDE.md`/`LAMPLIGHTER.md`, and the
    commands it may run. It edits files and may run the repo's build/tests to iterate. It
    **commits nothing**. The backend commits, so authorship and the trailer are not up to the model.
 3. Bounded: a round count and a wall-clock cap. A session that ends without a diff is `failed`, not
@@ -533,6 +673,9 @@ Two halves on one page:
   and `sensitive`. Kinds: `proposal-ready` (approve / reject / edit-and-approve),
   `pr-open` / `branch-open` (link, merge for bare git, close), `report` (read, mark read, turn into
   a proposal), `pushed` (revert), `alert`. Every item can be **dismissed with a reason**.
+  Deferred and declined findings are **not** inbox items (they would spend the attention the
+  arbiter saved); they live on a **Not now** list per repo and fleet-wide, each with its
+  rationale and cited precedents, and *take it* / *dismiss* actions (§6.4).
 - **Log**: every round, finding change, proposal step, delivery, decision and alert, as events.
 
 Every decision is stored next to what the model proposed (Newsdesk's override log). The repo
@@ -557,6 +700,7 @@ push, revert, delete branch), each requiring a typed confirmation.
 | `list_repos`, `get_repo`, `list_findings`, `get_finding`, `get_round_report`, `list_activity`, `get_schedule`, `get_budget` | read |
 | `request_round(repo, check, scope?)` | request: queued, never run inline |
 | `dismiss_finding(id, reason)`, `reopen_finding(id)` | judgement on a finding, not on code |
+| `list_not_now(repo?)`, `take_finding(id, reason?)` | judgement on a finding (§6.4). An MCP take is recorded `by: mcp`, never as a person's, so it sets no precedent. `submit_feedback(repo, text)` is future (§6.5) |
 | `get_policy`, `set_policy(group|repo, prose)`, `get_check`, `set_check_settings` | configure, with restore points (Newsdesk's config history) |
 | `add_repo`, `discover_repos(forge, owner)`, `set_repo_group` | registry |
 
@@ -572,6 +716,10 @@ below the first row.
   dismissals, proposals, activity items, events, usage. Touchstone dropped findings-as-rows. Here
   they are the product, and dedup, lifecycle and dismissals are relational. better-sqlite3 has
   glibc prebuilds for amd64 and arm64, so the image stays Debian-slim without node-gyp.
+  Since 0.8.0 (§6.4): findings carry `source` and `source_ref`; a **`decisions`** table
+  (`finding_id, decision, by, actor, rationale, precedents, input_hash, check_revision,
+  session_id, at`) replaced `dismissals`, which migrated as `dismiss` by `user`. Findings open at
+  the upgrade are simply *not judged yet*: the first arbitration of their repo judges them.
 - **Files on the volume** for what a person edits or reads: `checks/*.md`, `policy/<group>.md`,
   round reports.
 - **`config.yaml`**: read at boot. Live **controls** (armed, auto-submit, budget, caps) write back
@@ -597,3 +745,12 @@ below the first row.
 5. **Advisory API reach**: whether the fine-grained token can create GHSAs on every org in scope.
 6. **Gitea version** in use, for the webhook payload and PR label APIs.
 7. **Naming**: *lamp* / *round* are proposals; rename before M2 if they read wrong.
+8. **Arbiter cost and cadence** (§6.4): one session per repo per settled batch is the guess; at
+   200 repos it may need its own budget line, or a cheaper model than the producers.
+9. **Priority among admitted findings**: today the scheduler takes them in age order. Should the
+   arbiter also rank, or is that a second judgement that will drift?
+10. **Issue comments** (§6.5): whether to request *issues: write* at all, and what a decline
+    comment may say on a public repo.
+11. **Which issues are maintenance**: a feature request is a `request` finding today. Should the
+    arbiter decline features by policy (a repo says *"bugs and upkeep only"*), or should intake
+    drop them?

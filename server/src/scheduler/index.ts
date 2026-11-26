@@ -4,13 +4,15 @@ import { logEvent } from '../events.js'
 import { listRepos, getRepo, type RepoRow } from '../repos/registry.js'
 import { alert, runAuthor, runRound, settingsFor, type QueueRow } from '../sessions/engine.js'
 import { pollPullRequests, retryAutoSubmits } from '../delivery/index.js'
+import { runArbitration } from '../admission/arbiter.js'
 import { checkAllForges } from '../forges/auth.js'
 
 /**
  * One queue, served in order (Touchstone's model): foreground (what a person asked for, first in
  * first out), then background by tier — 1 security/cve on new commits, 2 other diff rounds,
  * 3 fixing what rounds found, 4 full rounds whose check revision moved, 5 full rounds past their
- * cadence. The budget gates agent sessions; detector-only rounds are free.
+ * cadence; at 2 as well, a repo's arbitration, once its rounds have settled. The budget gates agent
+ * sessions; detector-only rounds are free.
  */
 
 const DAY_MS = 86_400_000
@@ -190,7 +192,10 @@ export class Scheduler {
 
   private waitingReason(j: QueueRow): string | undefined {
     const cfg = this.app.config.current.schedule
-    if (j.trigger === 'push' && Date.now() - Date.parse(j.created_at) < cfg.debounce_min * 60_000) return 'debounce'
+    if ((j.trigger === 'push' || j.job === 'arbitrate') && Date.now() - Date.parse(j.created_at) < cfg.debounce_min * 60_000) return 'debounce'
+    if (j.job === 'arbitrate' && this.app.db.prepare("SELECT 1 FROM queue WHERE job = 'round' AND repo_key = ? AND state IN ('queued','running')").get(j.repo_key)) {
+      return "the repo's rounds are still settling"
+    }
     const def = this.app.checks.get(j.check_kind)
     const agent = j.job === 'author' || def?.agent !== 'none'
     if (agent && !j.foreground && sessionsThisHour(this.app) >= cfg.sessions_per_hour) return 'hourly session budget spent'
@@ -220,6 +225,7 @@ export class Scheduler {
     try {
       getRepo(this.app.db, j.repo_key)
       if (j.job === 'author') await runAuthor(this.app, j)
+      else if (j.job === 'arbitrate') await runArbitration(this.app, j)
       else await runRound(this.app, j)
       this.app.db.prepare("UPDATE queue SET state = 'done' WHERE id = ?").run(j.id)
     } catch (err) {

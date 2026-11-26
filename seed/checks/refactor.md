@@ -5,7 +5,7 @@ revision: 1
 scopes: [full]
 agent: review
 categories: [duplication, oversized-unit, tangled-responsibility, needless-indirection]
-defaults: { enabled: true, delivery: pr, auto_submit: false, armed: false, cadence_days: 30 }
+defaults: { enabled: true, delivery: pr, auto_submit: false, armed: false, cadence_days: 30, admission: arbiter, lean: defer }
 ---
 Find places where the structure of the code makes it harder to change than it needs to be:
 duplicated logic that has already drifted or will, functions or modules doing several unrelated
