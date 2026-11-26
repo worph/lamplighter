@@ -74,8 +74,4 @@ export class SessionRegistry {
   close(s: Session): void {
     this.byToken.delete(s.token)
   }
-
-  active(): Session[] {
-    return [...this.byToken.values()]
-  }
 }
